@@ -13,14 +13,14 @@ import { STORAGE_KEY_DASHBOARD_AUTO_REFRESH } from '../../../lib/constants'
 // ── Minimal mock surface ────────────────────────────────────────────
 const mockSafeGetItem = vi.fn().mockReturnValue(null)
 const mockSafeSetItem = vi.fn()
-const mockSafeGetJSON = vi.fn().mockReturnValue(null)
-const mockSafeSetJSON = vi.fn()
+const mockSafeSetJSON = vi.fn().mockReturnValue(true)
+const mockSafeRemoveItem = vi.fn()
 
 vi.mock('../../../lib/utils/localStorage', () => ({
   safeGetItem: (...args: unknown[]) => mockSafeGetItem(...args),
   safeSetItem: (...args: unknown[]) => mockSafeSetItem(...args),
-  safeGetJSON: (...args: unknown[]) => mockSafeGetJSON(...args),
   safeSetJSON: (...args: unknown[]) => mockSafeSetJSON(...args),
+  safeRemoveItem: (...args: unknown[]) => mockSafeRemoveItem(...args),
 }))
 
 const mockApiGet = vi.fn().mockResolvedValue({ data: [] })
@@ -265,7 +265,7 @@ describe('Dashboard', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     vi.clearAllMocks()
     mockSafeGetItem.mockReturnValue(null)
-    mockSafeGetJSON.mockReturnValue(null)
+    mockSafeSetJSON.mockReturnValue(true)
     mockLocation.pathname = '/'
     mockLocation.key = 'test-key'
     capturedGetStatValue = null
@@ -312,11 +312,52 @@ describe('Dashboard', () => {
   })
 
   it('renders cards from localStorage when available', () => {
-    mockSafeGetJSON.mockReturnValue([
-      { id: 'local-1', card_type: 'gpu_overview', config: {}, position: { x: 0, y: 0, w: 4, h: 2 } },
-    ])
+    mockSafeGetItem.mockImplementation((key: string) => {
+      if (key === 'kubestellar-main-dashboard-cards') {
+        return JSON.stringify([
+          { id: 'local-1', card_type: 'gpu_overview', config: {}, position: { x: 0, y: 0, w: 4, h: 2 } },
+        ])
+      }
+      return null
+    })
     render(<Dashboard />)
     expect(screen.getByTestId('card-local-1')).toBeInTheDocument()
+  })
+
+  it('falls back to default cards when stored cards fail schema validation', () => {
+    mockSafeGetItem.mockImplementation((key: string) => {
+      if (key === 'kubestellar-main-dashboard-cards') {
+        return JSON.stringify([
+          { id: 'broken-1', card_type: 'gpu_overview', config: {} },
+        ])
+      }
+      return null
+    })
+
+    render(<Dashboard />)
+
+    expect(screen.getByTestId('card-default-1')).toBeInTheDocument()
+    expect(mockSafeRemoveItem).toHaveBeenCalledWith('kubestellar-main-dashboard-cards')
+    expect(mockSafeRemoveItem).toHaveBeenCalledWith('kubestellar-main-dashboard-cards:schema-version')
+  })
+
+  it('falls back to default cards when stored schema version is stale', () => {
+    mockSafeGetItem.mockImplementation((key: string) => {
+      if (key === 'kubestellar-main-dashboard-cards') {
+        return JSON.stringify([
+          { id: 'local-1', card_type: 'gpu_overview', config: {}, position: { x: 0, y: 0, w: 4, h: 2 } },
+        ])
+      }
+      if (key === 'kubestellar-main-dashboard-cards:schema-version') return '0'
+      if (key === STORAGE_KEY_DASHBOARD_AUTO_REFRESH) return null
+      return null
+    })
+
+    render(<Dashboard />)
+
+    expect(screen.getByTestId('card-default-1')).toBeInTheDocument()
+    expect(mockSafeRemoveItem).toHaveBeenCalledWith('kubestellar-main-dashboard-cards')
+    expect(mockSafeRemoveItem).toHaveBeenCalledWith('kubestellar-main-dashboard-cards:schema-version')
   })
 
   it('renders floating actions', () => {
@@ -351,13 +392,14 @@ describe('Dashboard', () => {
     expect(mockSafeSetItem).toHaveBeenCalledWith(STORAGE_KEY_DASHBOARD_AUTO_REFRESH, 'false')
   })
 
-  it('persists cards to localStorage', async () => {
+  it('persists cards to localStorage with a schema version', async () => {
     render(<Dashboard />)
     await waitFor(() => {
       expect(mockSafeSetJSON).toHaveBeenCalledWith(
         'kubestellar-main-dashboard-cards',
         expect.any(Array)
       )
+      expect(mockSafeSetItem).toHaveBeenCalledWith('kubestellar-main-dashboard-cards:schema-version', '1')
     })
   })
 

@@ -25,7 +25,7 @@ import {
   Search,
   Satellite,
   History } from 'lucide-react'
-import { useSearchParams, useLocation } from 'react-router-dom'
+import { useSearchParams, useLocation, useNavigate } from 'react-router-dom'
 import { useMissions, isActiveMission } from '../../../hooks/useMissions'
 import { useMobile } from '../../../hooks/useMobile'
 import { StatusBadge } from '../../ui/StatusBadge'
@@ -48,11 +48,10 @@ import { ResolutionHistoryPanel } from '../../missions/ResolutionHistoryPanel'
 import { SaveResolutionDialog } from '../../missions/SaveResolutionDialog'
 import { useResolutions, detectIssueSignature } from '../../../hooks/useResolutions'
 import { useTranslation } from 'react-i18next'
-import { useAlertsContext } from '../../../contexts/AlertsContext'
-import { useDrillDownActions } from '../../../hooks/useDrillDown'
 import { SAVED_TOAST_MS, FOCUS_DELAY_MS } from '../../../lib/constants/network'
 import { MISSION_FILE_FETCH_TIMEOUT_MS } from '../../missions/browser/missionCache'
 import { isDemoMode } from '../../../lib/demoMode'
+import { ROUTES } from '../../../config/routes'
 
 const SIDEBAR_MIN_WIDTH = 380
 const SIDEBAR_MAX_WIDTH = 800
@@ -64,6 +63,18 @@ const SIDEBAR_WIDTH_KEY = 'ksc-mission-sidebar-width'
 // main content) so tablet layouts don't get squeezed below the min sidebar
 // width. See issues 6388 / 6394.
 const TABLET_BREAKPOINT_PX = 1024
+const ATTENTION_MISSION_STATUSES: ReadonlySet<Mission['status']> = new Set(['waiting_input', 'blocked'])
+const MISSION_BROWSER_QUERY_KEY = 'browse'
+const MISSION_BROWSER_QUERY_VALUE = 'missions'
+const MISSION_DEEP_LINK_QUERY_KEY = 'mission'
+const MISSION_IMPORT_QUERY_KEY = 'import'
+const MISSION_CONTROL_QUERY_KEY = 'mission-control'
+const MISSION_PLAN_QUERY_KEY = 'plan'
+const MISSION_BROWSER_HISTORY_STATE_KEY = 'kscMissionBrowserOpen'
+
+function getMissionAttentionCount(missions: Mission[]): number {
+  return missions.filter(mission => ATTENTION_MISSION_STATUSES.has(mission.status)).length
+}
 
 function loadSavedWidth(): number {
   const maxW = typeof window !== 'undefined'
@@ -266,22 +277,74 @@ export function MissionSidebar() {
   // Direct import: ?import= fetches and imports mission directly (no browser popup)
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
-  const deepLinkMission = searchParams.get('mission')
-  const directImportSlug = searchParams.get('import')
-  const browseParam = searchParams.get('browse')
-  const missionControlParam = searchParams.get('mission-control')
+  const navigate = useNavigate()
+  const browserHistoryEntryRef = useRef(false)
+  const deepLinkMission = searchParams.get(MISSION_DEEP_LINK_QUERY_KEY)
+  const directImportSlug = searchParams.get(MISSION_IMPORT_QUERY_KEY)
+  const browseParam = searchParams.get(MISSION_BROWSER_QUERY_KEY)
+  const missionControlParam = searchParams.get(MISSION_CONTROL_QUERY_KEY)
+  const isMissionBrowserRoute = location.pathname === ROUTES.MISSIONS
+  const isMissionBrowserDeepLink = Boolean(deepLinkMission) || browseParam === MISSION_BROWSER_QUERY_VALUE || isMissionBrowserRoute
   /** Mission pre-fetched by MissionLandingPage and passed via navigation state */
   const prefetchedMission = (location.state as { prefetchedMission?: MissionExport } | null)?.prefetchedMission
 
-  useEffect(() => {
-    if (deepLinkMission || browseParam === 'missions') {
-      setShowBrowser(true)
-      const newParams = new URLSearchParams(searchParams)
-      newParams.delete('mission')
-      newParams.delete('browse')
-      setSearchParams(newParams, { replace: true })
+  const getMissionBrowserSearchParams = () => {
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.delete(MISSION_DEEP_LINK_QUERY_KEY)
+    nextParams.delete(MISSION_BROWSER_QUERY_KEY)
+    return nextParams
+  }
+
+  const openMissionBrowser = () => {
+    if (typeof window !== 'undefined' && !isMissionBrowserDeepLink && !browserHistoryEntryRef.current) {
+      const currentState = window.history.state
+      const nextState = currentState && typeof currentState === 'object'
+        ? { ...(currentState as Record<string, unknown>), [MISSION_BROWSER_HISTORY_STATE_KEY]: true }
+        : { [MISSION_BROWSER_HISTORY_STATE_KEY]: true }
+      window.history.pushState(nextState, '', window.location.href)
+      browserHistoryEntryRef.current = true
     }
-  }, [deepLinkMission, browseParam, searchParams, setSearchParams])
+    setShowBrowser(true)
+  }
+
+  const closeMissionBrowser = () => {
+    if (isMissionBrowserRoute) {
+      const nextParams = getMissionBrowserSearchParams()
+      const nextSearch = nextParams.toString()
+      setShowBrowser(false)
+      navigate({ pathname: ROUTES.HOME, search: nextSearch ? `?${nextSearch}` : '' }, { replace: true })
+      return
+    }
+    if (isMissionBrowserDeepLink) {
+      setShowBrowser(false)
+      setSearchParams(getMissionBrowserSearchParams(), { replace: true })
+      return
+    }
+    if (browserHistoryEntryRef.current && typeof window !== 'undefined') {
+      window.history.back()
+      return
+    }
+    setShowBrowser(false)
+  }
+
+  useEffect(() => {
+    if (isMissionBrowserDeepLink) {
+      setShowBrowser(true)
+    }
+  }, [isMissionBrowserDeepLink])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const handlePopState = () => {
+      if (!showBrowser) return
+      browserHistoryEntryRef.current = false
+      setShowBrowser(false)
+    }
+
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [showBrowser])
 
   // #6474 — ?mission-control=open opens the MissionControlDialog.
   // Parallel to the ?browse=missions deep-link above. Gives users a
@@ -290,17 +353,17 @@ export function MissionSidebar() {
     if (missionControlParam === 'open') {
       setShowMissionControl(true)
       const newParams = new URLSearchParams(searchParams)
-      newParams.delete('mission-control')
+      newParams.delete(MISSION_CONTROL_QUERY_KEY)
       setSearchParams(newParams, { replace: true })
     } else if (missionControlParam === 'review') {
-      const planParam = searchParams.get('plan')
+      const planParam = searchParams.get(MISSION_PLAN_QUERY_KEY)
       if (planParam) {
         setPendingReviewPlan(planParam)
         setShowMissionControl(true)
       }
       const newParams = new URLSearchParams(searchParams)
-      newParams.delete('mission-control')
-      newParams.delete('plan')
+      newParams.delete(MISSION_CONTROL_QUERY_KEY)
+      newParams.delete(MISSION_PLAN_QUERY_KEY)
       setSearchParams(newParams, { replace: true })
     }
   }, [missionControlParam, searchParams, setSearchParams])
@@ -312,7 +375,7 @@ export function MissionSidebar() {
 
     // Clear the param immediately to prevent re-triggering
     const newParams = new URLSearchParams(searchParams)
-    newParams.delete('import')
+    newParams.delete(MISSION_IMPORT_QUERY_KEY)
     setSearchParams(newParams, { replace: true })
 
     // Fast path: if MissionLandingPage passed the already-fetched mission
@@ -392,7 +455,7 @@ export function MissionSidebar() {
       }
 
       // Last resort: open the browser if direct import failed
-      setShowBrowser(true)
+      openMissionBrowser()
     }
 
     tryImport().finally(() => setIsDirectImporting(false))
@@ -481,7 +544,6 @@ export function MissionSidebar() {
       steps: mission.steps?.map(s => ({ title: s.title, description: s.description })),
       tags: mission.tags,
       initialPrompt: mission.resolution?.summary || mission.description })
-    setShowBrowser(false)
     // Auto-open the sidebar and highlight the imported mission so the user
     // immediately sees where it went and can act on it
     openSidebar()
@@ -586,9 +648,7 @@ export function MissionSidebar() {
   // missions are terminal and are filtered out of the active list by
   // `isActiveMission`, so including them here produced a badge count the
   // user could not reconcile with the visible active list.
-  const needsAttention = missions.filter(m =>
-    m.status === 'waiting_input' || m.status === 'blocked'
-  ).length
+  const needsAttention = getMissionAttentionCount(missions)
 
   const runningCount = missions.filter(m => m.status === 'running').length
 
@@ -649,14 +709,16 @@ export function MissionSidebar() {
   }
 
 
+  const shouldRenderMinimizedSidebar = isSidebarOpen && isSidebarMinimized && !isMobile
+  const shouldRenderExpandedSidebar = isSidebarOpen && !isSidebarMinimized
+
   // Minimized sidebar view (thin strip) - desktop only
-  if (isSidebarMinimized && !isMobile) {
+  if (shouldRenderMinimizedSidebar) {
     return (
       <div
         className={cn(
         "fixed top-16 right-0 bottom-0 w-12 bg-card/95 backdrop-blur-xs border-l border-border shadow-xl z-sidebar flex flex-col items-center py-4",
-        "transition-transform duration-300 ease-in-out",
-        !isSidebarOpen && "translate-x-full pointer-events-none"
+        "transition-transform duration-300 ease-in-out"
       )}>
         <button
           onClick={expandSidebar}
@@ -686,48 +748,47 @@ export function MissionSidebar() {
 
   return (
     <>
-      {/* Mobile backdrop */}
-      {/* issue 6742 — tabIndex=-1 removes the backdrop from the Tab order, aria-hidden
-          hides it from assistive tech. The sidebar itself handles close semantics. */}
-      {isMobile && isSidebarOpen && (
-        <div
-          className="fixed inset-0 bg-black/60 backdrop-blur-xs z-overlay md:hidden"
-          onClick={closeSidebar}
-          tabIndex={-1}
-          aria-hidden="true"
-        />
-      )}
-      {/* Tablet backdrop — the sidebar renders as an overlay at < lg so main
-          content isn't squeezed. A tap-out backdrop mirrors mobile UX (issue 6388). */}
-      {!isMobile && isTablet && isSidebarOpen && !isFullScreen && (
-        <div
-          className="fixed inset-0 bg-black/40 backdrop-blur-xs z-overlay lg:hidden"
-          onClick={closeSidebar}
-          tabIndex={-1}
-          aria-hidden="true"
-        />
-      )}
+      {shouldRenderExpandedSidebar && (
+        <>
+          {/* Mobile backdrop */}
+          {/* issue 6742 — tabIndex=-1 removes the backdrop from the Tab order, aria-hidden
+              hides it from assistive tech. The sidebar itself handles close semantics. */}
+          {isMobile && (
+            <div
+              className="fixed inset-0 bg-black/60 backdrop-blur-xs z-overlay md:hidden"
+              onClick={closeSidebar}
+              tabIndex={-1}
+              aria-hidden="true"
+            />
+          )}
+          {/* Tablet backdrop — the sidebar renders as an overlay at < lg so main
+              content isn't squeezed. A tap-out backdrop mirrors mobile UX (issue 6388). */}
+          {!isMobile && isTablet && !isFullScreen && (
+            <div
+              className="fixed inset-0 bg-black/40 backdrop-blur-xs z-overlay lg:hidden"
+              onClick={closeSidebar}
+              tabIndex={-1}
+              aria-hidden="true"
+            />
+          )}
 
-      <div
-        data-tour="ai-missions"
-        data-testid="mission-sidebar"
-        className={cn(
-          "fixed bg-card border-border flex flex-col overflow-hidden shadow-2xl",
-          isMobile ? "z-modal" : "z-sidebar",
-          !isResizing && "transition-[width,top,border,transform] duration-300 ease-in-out",
-          // Mobile: bottom sheet
-          // vh fallback before dvh so browsers without dynamic-viewport-unit
-          // support still cap the sheet height (#6548).
-          isMobile && "inset-x-0 bottom-0 rounded-t-2xl border-t max-h-[80vh] max-h-[80dvh]",
-          isMobile && !isSidebarOpen && "translate-y-full pointer-events-none",
-          isMobile && isSidebarOpen && "translate-y-0",
-          // Desktop: right sidebar
-          !isMobile && isFullScreen && "inset-0 top-16 border-l-0 rounded-none",
-          !isMobile && !isFullScreen && "top-16 right-0 bottom-0 border-l shadow-xl",
-          !isMobile && !isSidebarOpen && "translate-x-full pointer-events-none"
-        )}
-        style={!isMobile && !isFullScreen ? { width: sidebarWidth } : undefined}
-      >
+          <div
+            data-tour="ai-missions"
+            data-testid="mission-sidebar"
+            className={cn(
+              "fixed bg-card border-border flex flex-col overflow-hidden shadow-2xl",
+              isMobile ? "z-modal" : "z-sidebar",
+              !isResizing && "transition-[width,top,border,transform] duration-300 ease-in-out",
+              // Mobile: bottom sheet
+              // vh fallback before dvh so browsers without dynamic-viewport-unit
+              // support still cap the sheet height (#6548).
+              isMobile && "inset-x-0 bottom-0 rounded-t-2xl border-t max-h-[80vh] max-h-[80dvh] translate-y-0",
+              // Desktop: right sidebar
+              !isMobile && isFullScreen && "inset-0 top-16 border-l-0 rounded-none",
+              !isMobile && !isFullScreen && "top-16 right-0 bottom-0 border-l shadow-xl"
+            )}
+            style={!isMobile && !isFullScreen ? { width: sidebarWidth } : undefined}
+          >
       {/* Desktop resize handle (left edge) */}
       {!isMobile && !isFullScreen && isSidebarOpen && (
         <div
@@ -789,7 +850,7 @@ export function MissionSidebar() {
                   New Mission
                 </button>
                 <button
-                  onClick={() => { setShowAddMenu(false); setShowBrowser(true) }}
+                  onClick={() => { setShowAddMenu(false); openMissionBrowser() }}
                   className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted/30 text-foreground"
                 >
                   <Globe className="w-4 h-4 text-muted-foreground" />
@@ -1029,7 +1090,7 @@ export function MissionSidebar() {
               </button>
             )}
             <button
-              onClick={() => setShowBrowser(true)}
+              onClick={() => openMissionBrowser()}
               className="flex flex-col items-center justify-center gap-1.5 px-3 py-3 text-sm font-medium bg-secondary text-foreground rounded-lg hover:bg-secondary/80 transition-colors h-[72px]"
             >
               <Globe className="w-6 h-6 shrink-0" />
@@ -1241,7 +1302,7 @@ export function MissionSidebar() {
               </button>
             )}
             <button
-              onClick={() => setShowBrowser(true)}
+              onClick={() => openMissionBrowser()}
               className="flex flex-col items-center justify-center gap-1.5 px-3 py-3 text-sm font-medium bg-secondary text-foreground rounded-lg hover:bg-secondary/80 transition-colors h-[72px]"
             >
               <Globe className="w-6 h-6 shrink-0" />
@@ -1443,7 +1504,9 @@ export function MissionSidebar() {
           )}
         </div>
       )}
-    </div>
+          </div>
+        </>
+      )}
 
       {/* Saved Mission Detail Modal */}
       {viewingMission && (
@@ -1493,11 +1556,11 @@ export function MissionSidebar() {
       <Suspense fallback={null}>
         <MissionBrowser
           isOpen={showBrowser}
-          onClose={() => setShowBrowser(false)}
+          onClose={closeMissionBrowser}
           onImport={handleImportMission}
           initialMission={deepLinkMission || undefined}
           onUseInMissionControl={(chartName: string) => {
-            setShowBrowser(false)
+            closeMissionBrowser()
             setPendingKubaraChart(chartName)
             setShowMissionControl(true)
           }}
@@ -1544,6 +1607,7 @@ export function MissionSidebar() {
           mission={activeMission}
           isOpen={showSaveResolutionDialog}
           onClose={() => setShowSaveResolutionDialog(false)}
+          onSaved={() => setResolutionPanelView('history')}
         />
       )}
     </>
@@ -1555,12 +1619,7 @@ export function MissionSidebarToggle() {
   const { t } = useTranslation(['common'])
   const { missions, isSidebarOpen, openSidebar } = useMissions()
   const { isMobile } = useMobile()
-  const { activeAlerts } = useAlertsContext()
-  const { drillToAllAlerts } = useDrillDownActions()
-
-  // Count active alerts that need attention (firing alerts, not acknowledged)
-  const needsAttention = activeAlerts.length
-
+  const needsAttention = getMissionAttentionCount(missions)
   const runningCount = missions.filter(m => m.status === 'running').length
   /**
    * Active mission count — excludes saved/completed/failed/cancelled (#5947).
@@ -1576,31 +1635,31 @@ export function MissionSidebarToggle() {
 
   return (
     <button
-      onClick={needsAttention > 0 ? () => drillToAllAlerts() : openSidebar}
+      type="button"
+      onClick={openSidebar}
       data-tour="ai-missions-toggle"
       data-testid="mission-sidebar-toggle"
       className={cn(
-        'fixed flex items-center gap-2 rounded-full shadow-lg transition-all z-50',
+        'fixed flex items-center gap-2 rounded-full border border-border bg-card text-foreground shadow-lg transition-all z-50 hover:bg-secondary',
         // Mobile: smaller padding, bottom right
         isMobile ? 'px-3 py-2 right-4 bottom-4' : 'px-4 py-3 right-4 bottom-4',
-        needsAttention > 0
-          ? 'bg-purple-500 text-white animate-pulse'
-          : 'bg-card border border-border text-foreground hover:bg-secondary'
+        needsAttention > 0 && 'ring-2 ring-purple-500/30'
       )}
       title={t('missionSidebar.openAIMissions')}
     >
-      <LogoWithStar className={isMobile ? 'w-4 h-4' : 'w-5 h-5'} />
+      <LogoWithStar className={cn(isMobile ? 'w-4 h-4' : 'w-5 h-5', needsAttention > 0 && 'text-purple-400')} />
       {runningCount > 0 && (
-        <Loader2 className={isMobile ? 'w-3 h-3 animate-spin' : 'w-4 h-4 animate-spin'} />
+        <Loader2 className={isMobile ? 'w-3 h-3 animate-spin text-purple-400' : 'w-4 h-4 animate-spin text-purple-400'} />
       )}
-      {needsAttention > 0 ? (
-        <span className={isMobile ? 'text-xs font-medium' : 'text-sm font-medium'}>{t('missionSidebar.needsAttention', { count: needsAttention })}</span>
-      ) : activeCount > 0 ? (
-        <span className={isMobile ? 'text-xs' : 'text-sm'}>{t('missionSidebar.missionCount', { count: activeCount })}</span>
-      ) : (
-        <span className={isMobile ? 'text-xs' : 'text-sm'}>{t('missionSidebar.aiMissions')}</span>
+      <span className={cn(isMobile ? 'text-xs' : 'text-sm', needsAttention > 0 && 'font-medium')}>
+        {activeCount > 0 ? t('missionSidebar.missionCount', { count: activeCount }) : t('missionSidebar.aiMissions')}
+      </span>
+      {needsAttention > 0 && (
+        <StatusBadge color="purple" size={isMobile ? 'xs' : 'sm'} variant="solid" rounded="full">
+          {needsAttention}
+        </StatusBadge>
       )}
-      <ChevronRight className={cn(isMobile ? 'w-3 h-3' : 'w-4 h-4', isMobile && '-rotate-90')} />
+      <ChevronRight className={cn(isMobile ? 'w-3 h-3' : 'w-4 h-4', isMobile && '-rotate-90', needsAttention > 0 && 'text-purple-400')} />
     </button>
   )
 }

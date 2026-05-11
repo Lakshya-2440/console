@@ -575,7 +575,7 @@ export function MissionProvider({ children }: { children: ReactNode }) {
           streamSplitCounter.current.clear()
           // #7106 — Clear all per-mission status-update timers
           for (const timers of missionStatusTimers.current.values()) {
-            for (const handle of timers) {
+            for (const handle of (timers || [])) {
               clearTimeout(handle)
             }
           }
@@ -842,7 +842,7 @@ export function MissionProvider({ children }: { children: ReactNode }) {
               // non-idempotent agents, see #5930) vs stale (backend session
               // has very likely expired, see #6371).
               const now = Date.now()
-              for (const m of candidates) {
+              for (const m of (candidates || [])) {
                 const ageMs = now - new Date(m.updatedAt).getTime()
                 if (ageMs > MISSION_RECONNECT_MAX_AGE_MS) {
                   missionsToMarkStale.push(m.id)
@@ -961,7 +961,7 @@ export function MissionProvider({ children }: { children: ReactNode }) {
             // long-running tool call. The count resets to the real value
             // once the first tool_start or tool_result frame arrives.
             const OPTIMISTIC_TOOLS_IN_FLIGHT = 1
-            for (const mission of dedupedMissions) {
+            for (const mission of (dedupedMissions || [])) {
               toolsInFlight.current.set(mission.id, OPTIMISTIC_TOOLS_IN_FLIGHT)
             }
             setTimeout(() => {
@@ -1140,7 +1140,7 @@ export function MissionProvider({ children }: { children: ReactNode }) {
           // #6836 — Cancel pending wsSend retry timers so they don't fire
           // on the dead socket. The main unmount effect also clears these,
           // but onclose fires on transient disconnects (not just unmount).
-          for (const handle of wsSendRetryTimers.current) {
+          for (const handle of (wsSendRetryTimers.current || [])) {
             clearTimeout(handle)
           }
           wsSendRetryTimers.current.clear()
@@ -1250,7 +1250,7 @@ The WebSocket connection to the agent at \`${LOCAL_AGENT_WS_URL}\` was lost and 
           pendingRequests.current.clear()
           // #6836 — Cancel pending wsSend retry timers on error so they
           // don't fire on the dead/closed socket.
-          for (const handle of wsSendRetryTimers.current) {
+          for (const handle of (wsSendRetryTimers.current || [])) {
             clearTimeout(handle)
           }
           wsSendRetryTimers.current.clear()
@@ -1270,7 +1270,7 @@ The WebSocket connection to the agent at \`${LOCAL_AGENT_WS_URL}\` was lost and 
           streamSplitCounter.current.clear()
           // #7106 — Clear status-update timers on WS error
           for (const timers of missionStatusTimers.current.values()) {
-            for (const handle of timers) {
+            for (const handle of (timers || [])) {
               clearTimeout(handle)
             }
           }
@@ -1302,7 +1302,7 @@ The WebSocket connection to the agent at \`${LOCAL_AGENT_WS_URL}\` was lost and 
   const clearMissionStatusTimers = (missionId: string) => {
     const timers = missionStatusTimers.current.get(missionId)
     if (timers) {
-      for (const handle of timers) {
+      for (const handle of (timers || [])) {
         clearTimeout(handle)
       }
       missionStatusTimers.current.delete(missionId)
@@ -2949,6 +2949,150 @@ Install the console locally with the KubeStellar Console agent to use AI mission
       }
     }))
 
+    // Route kagenti follow-up messages through SSE proxy, matching initial
+    // message path. Without this check, follow-ups fall through to local-agent
+    // WebSocket and fail in in-cluster deployments (#12992).
+    if (selectedAgentRef.current === 'kagenti') {
+      const startedAt = Date.now()
+      const assistantMessageId = generateMessageId('kagenti-stream')
+      const mission = missionsRef.current.find(m => m.id === missionId)
+      const missionType = mission?.type || 'unknown'
+
+      void (async () => {
+        let target = getSelectedKagentiAgentFromStorage()
+        if (!target) {
+          const discovered = await fetchKagentiProviderAgents()
+          if ((discovered || []).length > 0) {
+            target = {
+              namespace: discovered[0].namespace,
+              name: discovered[0].name,
+            }
+          }
+        }
+
+        if (!target) {
+          executingMissions.current.delete(missionId)
+          const errorContent = `**Kagenti Agent Not Selected**\n\nSelect a Kagenti agent in Settings → Agent Backend, then retry this mission.`
+          setMissions(prev => prev.map(m =>
+            m.id === missionId
+              ? {
+                  ...m,
+                  status: 'failed',
+                  currentStep: undefined,
+                  messages: [
+                    ...getMissionMessages(m.messages),
+                    {
+                      id: generateMessageId('kagenti-missing-agent'),
+                      role: 'system',
+                      content: errorContent,
+                      timestamp: new Date(),
+                    },
+                  ],
+                }
+              : m
+          ))
+          emitMissionError(missionType, 'kagenti_agent_missing', 'no_selected_kagenti_agent')
+          return
+        }
+
+        await kagentiProviderChat(target.name, target.namespace, content, {
+          contextId: missionId,
+          onChunk: (text: string) => {
+            setMissions(prev => prev.map(m => {
+              if (m.id !== missionId) return m
+
+              const missionMessages = getMissionMessages(m.messages)
+              const idx = missionMessages.findIndex(msg => msg.id === assistantMessageId)
+              if (idx === -1) {
+                return {
+                  ...m,
+                  currentStep: `Processing with ${selectedAgentRef.current || 'kagenti'}...`,
+                  messages: [
+                    ...missionMessages,
+                    {
+                      id: assistantMessageId,
+                      role: 'assistant',
+                      content: text,
+                      timestamp: new Date(),
+                      agent: selectedAgentRef.current || 'kagenti',
+                    },
+                  ],
+                }
+              }
+
+              const nextMessages = [...missionMessages]
+              nextMessages[idx] = {
+                ...nextMessages[idx],
+                content: `${nextMessages[idx].content}${text}`,
+                timestamp: new Date(),
+              }
+              return {
+                ...m,
+                currentStep: `Processing with ${selectedAgentRef.current || 'kagenti'}...`,
+                messages: nextMessages,
+              }
+            }))
+          },
+          onDone: () => {
+            executingMissions.current.delete(missionId)
+            const durationMs = Math.max(0, Date.now() - startedAt)
+            emitMissionCompleted(missionType, durationMs)
+
+            setMissions(prev => prev.map(m => {
+              if (m.id !== missionId) return m
+
+              const missionMessages = getMissionMessages(m.messages)
+              const hasAssistant = missionMessages.some(msg => msg.id === assistantMessageId && msg.content.trim().length > 0)
+              return {
+                ...m,
+                status: 'completed',
+                currentStep: undefined,
+                updatedAt: new Date(),
+                messages: hasAssistant
+                  ? missionMessages
+                  : [
+                      ...missionMessages,
+                      {
+                        id: assistantMessageId,
+                        role: 'assistant',
+                        content: 'Task completed.',
+                        timestamp: new Date(),
+                        agent: selectedAgentRef.current || 'kagenti',
+                      },
+                    ],
+              }
+            }))
+          },
+          onError: (error: string) => {
+            executingMissions.current.delete(missionId)
+            emitMissionError(missionType, 'kagenti_chat_error', error)
+
+            setMissions(prev => prev.map(m =>
+              m.id === missionId
+                ? {
+                    ...m,
+                    status: 'failed',
+                    currentStep: undefined,
+                    updatedAt: new Date(),
+                    messages: [
+                      ...getMissionMessages(m.messages),
+                      {
+                        id: generateMessageId('kagenti-error'),
+                        role: 'system',
+                        content: `**Kagenti Request Failed**\n\n${error}`,
+                        timestamp: new Date(),
+                      },
+                    ],
+                  }
+                : m
+            ))
+          },
+        })
+      })()
+
+      return
+    }
+
     ensureConnection().then(() => {
       const requestId = generateRequestId()
       pendingRequests.current.set(requestId, missionId)
@@ -3215,7 +3359,7 @@ Install the console locally with the KubeStellar Console agent to use AI mission
       }
       // #6629 — Cancel any in-flight wsSend retry timers so they don't
       // fire on an unmounted provider or touch a dying socket.
-      for (const handle of wsSendRetryTimersRef) {
+      for (const handle of (wsSendRetryTimersRef || [])) {
         clearTimeout(handle)
       }
       wsSendRetryTimersRef.clear()
@@ -3241,7 +3385,7 @@ Install the console locally with the KubeStellar Console agent to use AI mission
       waitingInputTimeoutsRef.clear()
       // #7106 — Clear all per-mission status-update timers
       for (const timers of missionStatusTimersRef.values()) {
-        for (const handle of timers) {
+        for (const handle of (timers || [])) {
           clearTimeout(handle)
         }
       }

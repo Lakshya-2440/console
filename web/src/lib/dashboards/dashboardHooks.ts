@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, SetStateAction } from 'react'
+import { loadDashboardCardsFromStorage, saveDashboardCardsToStorage } from './dashboardCardStorage'
 import {
   KeyboardSensor,
   PointerSensor,
@@ -123,7 +124,8 @@ export interface UseDashboardCardsResult {
 
 export function useDashboardCards(
   storageKey: string,
-  defaultCards: DashboardCardPlacement[]
+  defaultCards: DashboardCardPlacement[],
+  isActive: boolean = true,
 ): UseDashboardCardsResult {
   // Convert default placements to card instances
   const defaultCardInstances = defaultCards.map((card, i) => ({
@@ -139,27 +141,19 @@ export function useDashboardCards(
 
   // Load cards from localStorage initially (fast), then sync with backend
   const [cards, setCards] = useState<DashboardCard[]>(() => {
-    try {
-      const stored = localStorage.getItem(storageKey)
-      if (stored) {
-        const parsed = JSON.parse(stored) as DashboardCard[]
-        // Filter out card types that were removed from the registry (e.g.
-        // acmm_balance after #8426). Without this, users who visited
-        // before the removal keep a ghost card in their saved layout.
-        // Check both UnifiedCardConfig AND the component registry so
-        // component-only cards (e.g. benchmark_hero) are not pruned.
-        const valid = parsed.filter(c =>
-          hasUnifiedConfig(c.card_type) || isCardTypeRegistered(c.card_type)
-        )
-        // Ensure every card has a position object (guards against old/corrupt data)
-        return valid.map(c => ({
-          ...c,
-          position: c.position || { w: 4, h: 2 } }))
-      }
-    } catch {
-      // Fall through to return defaults
-    }
-    return defaultCardInstances
+    const storedCards = loadDashboardCardsFromStorage<DashboardCard>(storageKey, defaultCardInstances)
+    // Filter out card types that were removed from the registry (e.g.
+    // acmm_balance after #8426). Without this, users who visited
+    // before the removal keep a ghost card in their saved layout.
+    // Check both UnifiedCardConfig AND the component registry so
+    // component-only cards (e.g. benchmark_hero) are not pruned.
+    const valid = storedCards.filter(c =>
+      hasUnifiedConfig(c.card_type) || isCardTypeRegistered(c.card_type)
+    )
+    // Ensure every card has a position object (guards against old/corrupt data)
+    return valid.map(c => ({
+      ...c,
+      position: c.position || { w: 4, h: 2 } }))
   })
 
   const [isSyncing, setIsSyncing] = useState(false)
@@ -208,7 +202,7 @@ export function useDashboardCards(
     }
 
     // Always save to localStorage (fast, works offline)
-    localStorage.setItem(storageKey, JSON.stringify(cards))
+    saveDashboardCardsToStorage(storageKey, cards)
 
     // Sync to backend (debounced in the sync service)
     dashboardSync.saveCards(storageKey, cards)
@@ -223,6 +217,7 @@ export function useDashboardCards(
     snapshot, undo, redo, canUndo, canRedo } = useDashboardUndoRedo<DashboardCard>(
     (restored) => setCards(restored),
     () => cardsRef.current,
+    isActive,
   )
 
   // Wrapper that snapshots before calling setCards
@@ -484,6 +479,8 @@ export interface UseDashboardOptions {
   storageKey: string
   /** Default card placements */
   defaultCards: DashboardCardPlacement[]
+  /** Whether this dashboard instance is currently active/visible */
+  isActive?: boolean
   /** Refresh function for auto-refresh */
   onRefresh?: () => void
   /** Auto-refresh interval in ms */
@@ -506,10 +503,10 @@ export interface UseDashboardResult
 }
 
 export function useDashboard(options: UseDashboardOptions): UseDashboardResult {
-  const { storageKey, defaultCards, onRefresh, autoRefreshInterval = 30000 } = options
+  const { storageKey, defaultCards, isActive = true, onRefresh, autoRefreshInterval = 30000 } = options
 
   // Card management
-  const cardState = useDashboardCards(storageKey, defaultCards)
+  const cardState = useDashboardCards(storageKey, defaultCards, isActive)
 
   // DnD
   const dnd = useDashboardDnD(cardState.cards, cardState.setCards)

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams, useLocation, useNavigate } from 'react-router-dom'
-import { AlertTriangle, ChevronRight, ChevronDown, Server, Scissors } from 'lucide-react'
+import { AlertCircle, AlertTriangle, CheckCircle, ChevronRight, ChevronDown, Server, Scissors } from 'lucide-react'
 import { useClusters, useGPUNodes, useNVIDIAOperators, refreshSingleCluster } from '../../hooks/useMCP'
 import { agentFetch } from '../../hooks/mcp/shared'
 import { ClusterDetailModal } from './ClusterDetailModal'
@@ -18,7 +18,7 @@ import { useApiKeyCheck, ApiKeyPromptModal } from '../cards/console-missions/sha
 import { loadMissionPrompt } from '../cards/multi-tenancy/missionLoader'
 import { DashboardPage } from '../../lib/dashboards/DashboardPage'
 import { getDefaultCards } from '../../config/dashboards'
-import { useLocalAgent } from '../../hooks/useLocalAgent'
+import { useLocalAgent, wasAgentEverConnected } from '../../hooks/useLocalAgent'
 import { emitClusterStatsDrillDown } from '../../lib/analytics'
 import { ROUTES } from '../../config/routes'
 import { isInClusterMode } from '../../hooks/useBackendHealth'
@@ -35,6 +35,7 @@ import { useToast } from '../ui/Toast'
 import type { StatBlockValue } from '../ui/StatsOverview'
 import { formatMemoryStat } from '../../lib/formatStats'
 import { RotatingTip } from '../ui/RotatingTip'
+import { StatusBadge } from '../ui/StatusBadge'
 import { useClusterFiltering } from './useClusterFiltering'
 import { useClusterStats } from './useClusterStats'
 import { ClusterGroupsSection } from './ClusterGroupsSection'
@@ -67,7 +68,7 @@ export function Clusters() {
   // When demo mode is OFF and agent is not connected, force skeleton display
   // Also show skeleton during mode switching for smooth transitions
   const isAgentOffline = agentStatus === 'disconnected'
-  const forceSkeletonForOffline = !isDemoMode && isAgentOffline && !isInClusterMode()
+  const forceSkeletonForOffline = !isDemoMode && isAgentOffline && !isInClusterMode() && !wasAgentEverConnected()
   const { isClusterAdmin, loading: permissionsLoading } = usePermissions()
   const {
     selectedClusters: globalSelectedClusters,
@@ -242,6 +243,29 @@ export function Clusters() {
   })()
 
   const stats = useClusterStats({ globalFilteredClusters, gpuByCluster })
+  const headerBadge = (() => {
+    if (stats.unreachable > 0) {
+      return (
+        <StatusBadge color="red" size="xs" variant="outline" icon={<AlertCircle className="w-3 h-3" />}>
+          {`${stats.unreachable} offline cluster${stats.unreachable === 1 ? '' : 's'}`}
+        </StatusBadge>
+      )
+    }
+
+    if (stats.unhealthy > 0) {
+      return (
+        <StatusBadge color="yellow" size="xs" variant="outline" icon={<AlertTriangle className="w-3 h-3" />}>
+          {`${stats.unhealthy} degraded cluster${stats.unhealthy === 1 ? '' : 's'}`}
+        </StatusBadge>
+      )
+    }
+
+    return (
+      <StatusBadge color="green" size="xs" variant="outline" icon={<CheckCircle className="w-3 h-3" />}>
+        All clusters healthy
+      </StatusBadge>
+    )
+  })()
 
   // Determine if we should show skeleton content (loading with no data OR offline without demo OR mode switching)
   const showSkeletonContent = (isLoading && (clusters || []).length === 0) || forceSkeletonForOffline || isModeSwitching
@@ -453,6 +477,7 @@ export function Clusters() {
       title={t('navigation.clusters')}
       subtitle={t('cluster.subtitle')}
       icon="Server"
+      afterTitle={headerBadge}
       storageKey={CLUSTERS_CARDS_KEY}
       defaultCards={DEFAULT_CLUSTERS_CARDS}
       statsType="clusters"

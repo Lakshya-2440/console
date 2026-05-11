@@ -36,8 +36,9 @@ import { ROUTES } from '../../config/routes'
 import { getDefaultCardsForDashboard } from '../../config/dashboards'
 import { safeLazy } from '../../lib/safeLazy'
 import { CardRecommendations } from './CardRecommendations'
-import { safeGetItem, safeSetItem, safeGetJSON, safeSetJSON } from '../../lib/utils/localStorage'
+import { safeGetItem, safeSetItem } from '../../lib/utils/localStorage'
 import { STORAGE_KEY_DASHBOARD_AUTO_REFRESH } from '../../lib/constants'
+import { loadDashboardCardsFromStorage, saveDashboardCardsToStorage } from '../../lib/dashboards/dashboardCardStorage'
 import { MissionSuggestions } from './MissionSuggestions'
 import { GettingStartedBanner } from './GettingStartedBanner'
 import { useMissions } from '../../hooks/useMissions'
@@ -104,15 +105,20 @@ export function Dashboard() {
   const [isLoading, setIsLoading] = useState(false) // Cards are pre-populated from localStorage/defaults — never block
   const location = useLocation()
   const navigate = useNavigate()
+  const isActiveDashboard = location.pathname === '/' || location.pathname === ''
   const [searchParams, setSearchParams] = useSearchParams()
   const { isOpen: isConfigureCardOpen, open: openConfigureCard, close: closeConfigureCard } = useModalState()
   const [selectedCard, setSelectedCard] = useState<Card | null>(null)
   const [localCards, setLocalCards] = useState<Card[]>(() => {
     // Priority: cache > localStorage > default cards
     if (dashboardCache?.cards?.length) return dashboardCache.cards
-    const parsed = safeGetJSON<Card[]>(DASHBOARD_STORAGE_KEY)
-    if (parsed && Array.isArray(parsed) && parsed.length > 0) {
-      return parsed
+    const restoredCards = loadDashboardCardsFromStorage<Card>(
+      DASHBOARD_STORAGE_KEY,
+      DEFAULT_DASHBOARD_CARDS,
+      { requirePosition: true, requireGridCoordinates: true },
+    )
+    if (restoredCards.length > 0) {
+      return restoredCards
     }
     return DEFAULT_DASHBOARD_CARDS
   })
@@ -169,6 +175,7 @@ export function Dashboard() {
   const { snapshot, undo, redo, canUndo, canRedo } = useDashboardUndoRedo<Card>(
     setLocalCards,
     () => localCardsRef.current,
+    isActiveDashboard,
   )
 
   // Contextual nudges (replaces traditional tour with in-context hints)
@@ -572,7 +579,7 @@ export function Dashboard() {
         dashboardCache = { ...dashboardCache, cards: localCards, timestamp: Date.now() }
       }
       // Persist to localStorage for quick restore on page refresh
-      safeSetJSON(DASHBOARD_STORAGE_KEY, localCards)
+      saveDashboardCardsToStorage(DASHBOARD_STORAGE_KEY, localCards)
     }
   }, [localCards])
 

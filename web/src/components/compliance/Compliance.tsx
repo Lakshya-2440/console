@@ -12,6 +12,7 @@ import { getDefaultCards } from '../../config/dashboards'
 import { useDemoMode } from '../../hooks/useDemoMode'
 import { emitComplianceDrillDown } from '../../lib/analytics'
 import { RotatingTip } from '../ui/RotatingTip'
+import { buildComplianceScoreSummary } from '../../lib/complianceScore'
 
 const COMPLIANCE_CARDS_KEY = 'compliance-dashboard-cards'
 
@@ -48,7 +49,11 @@ export function Compliance() {
 
   // Build the set of cluster names that pass the global filter, so we can
   // scope tool aggregates to exactly those clusters (#4714, #4722).
-  const filteredClusterNames = new Set(filteredClusters.map(c => c.name))
+  // Memoize the Set to prevent breaking useMemo dependencies (#12827).
+  const filteredClusterNames = useMemo(
+    () => new Set(filteredClusters.map(c => c.name)),
+    [filteredClusters]
+  )
 
   // Aggregate real data across *filtered* clusters only
   const realData = useMemo(() => {
@@ -147,15 +152,24 @@ export function Compliance() {
   const kyvernoIsDemo = explicitDemoMode && (kyverno.isDemoData || !realData.kyvernoInstalled)
   const kubescapeIsDemo = explicitDemoMode && (kubescape.isDemoData || !realData.kubescapeInstalled)
   const trivyIsDemo = explicitDemoMode && (trivy.isDemoData || !realData.trivyInstalled)
+  const complianceScoreSummary = useMemo(() => buildComplianceScoreSummary({
+    kubescapeStatuses: kubescape.statuses,
+    kyvernoStatuses: kyverno.statuses,
+    selectedClusters: filteredClusters.map(cluster => cluster.name),
+  }), [filteredClusters, kubescape.statuses, kyverno.statuses])
 
   // Stats value getter for the configurable StatsOverview component
   const getDashboardStatValue = (blockId: string): StatBlockValue => {
     switch (blockId) {
-      // Overall compliance — real when any tool is installed, demo otherwise
-      case 'score':
+      // Keep the overview score aligned with the Compliance Score donut card.
+      case 'score': {
+        const scoreValue = allDemo || !complianceScoreSummary.usingFallback
+          ? complianceScoreSummary.score
+          : 0
         return allDemo
-          ? { value: '78%', sublabel: 'compliance score', isDemo: true, isClickable: false }
-          : { value: `${realData.overallScore}%`, sublabel: 'compliance score', onClick: () => { emitComplianceDrillDown('score'); drillToAllSecurity() }, isClickable: reachableClusters.length > 0 }
+          ? { value: `${scoreValue}%`, sublabel: 'compliance score', isDemo: true, isClickable: false }
+          : { value: `${scoreValue}%`, sublabel: 'compliance score', onClick: () => { emitComplianceDrillDown('score'); drillToAllSecurity() }, isClickable: reachableClusters.length > 0 }
+      }
       case 'total_checks':
         return allDemo
           ? { value: (reachableClusters.length || 1) * MOCK_CHECKS_PER_CLUSTER, sublabel: 'total checks', isDemo: true, isClickable: false }

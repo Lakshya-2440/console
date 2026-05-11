@@ -52,6 +52,8 @@ export interface FeatureRequest {
   screenshots_uploaded?: number
   /** Number of screenshots that failed to upload (only in create response) */
   screenshots_failed?: number
+  /** Non-fatal warning surfaced after the issue was created */
+  warning?: string
 }
 
 /** Check if a request has been triaged (accepted for review) */
@@ -106,9 +108,14 @@ export interface DiagnosticInfo {
   agent_arch?: string
   install_method?: string
   clusters?: number
+  cluster_context?: string
+  console_deploy_mode?: string
+  active_agent_backend?: string
+  backend_ws_status?: string
   agent_connection_status?: string
   agent_connection_failures?: number
   agent_last_error?: string
+  agent_connection_log?: string[]
   browser_user_agent?: string
   browser_platform?: string
   browser_language?: string
@@ -122,6 +129,7 @@ export interface CreateFeatureRequestInput {
   description: string
   request_type: RequestType
   target_repo?: TargetRepo
+  parent_issue_number?: number
   /** Base64 data-URI screenshots to upload and embed in the GitHub issue */
   screenshots?: string[]
   /** Recent browser console errors captured automatically for bug reports */
@@ -135,6 +143,14 @@ export interface CreateFeatureRequestInput {
 export interface SubmitFeedbackInput {
   feedback_type: FeedbackType
   comment?: string
+}
+
+export interface CloseRequestInput {
+  user_verified?: boolean
+}
+
+export interface ReopenRequestInput {
+  comment: string
 }
 
 // Status display helpers
@@ -386,17 +402,25 @@ export function useFeatureRequests(currentUserId?: string, options?: UseFeatureR
     setIsRefreshing(false)
   }
 
+  const withClientContext = useCallback(async <T extends { headers?: Record<string, string>; timeout?: number }>(options?: T): Promise<T | undefined> => {
+    const { getClientCtx } = await import('../lib/clientCtx')
+    const ctx = getClientCtx()
+    if (!ctx) {
+      return options
+    }
+    return {
+      ...(options ?? {}),
+      headers: {
+        ...(options?.headers ?? {}),
+        'X-KC-Client-Auth': ctx,
+      },
+    } as unknown as T
+  }, [])
+
   const createRequest = async (input: CreateFeatureRequestInput, options?: { timeout?: number }) => {
     try {
       setIsSubmitting(true)
-      // Attach the per-user client credential so the backend can route
-      // through the attribution proxy. The header name is intentionally
-      // non-descriptive (do not rename to anything auth-suggestive).
-      const { getClientCtx } = await import('../lib/clientCtx')
-      const ctx = getClientCtx()
-      const mergedOpts = ctx
-        ? { ...(options ?? {}), headers: { ...(options as { headers?: Record<string, string> })?.headers, 'X-KC-Client-Auth': ctx } }
-        : options
+      const mergedOpts = await withClientContext(options)
       const { data } = await api.post<FeatureRequest>('/api/feedback/requests', input, mergedOpts)
       setRequests(prev => [data, ...prev])
       return data
@@ -427,9 +451,16 @@ export function useFeatureRequests(currentUserId?: string, options?: UseFeatureR
     return data
   }
 
-  const closeRequest = async (requestId: string) => {
-    const { data } = await api.post<FeatureRequest>(`/api/feedback/requests/${requestId}/close`)
-    // Update the request in the list
+  const closeRequest = async (requestId: string, input: CloseRequestInput = {}) => {
+    const requestOptions = await withClientContext<{ headers?: Record<string, string> }>({})
+    const { data } = await api.patch<FeatureRequest>(`/api/feedback/${requestId}/close`, input, requestOptions)
+    setRequests(prev => prev.map(r => r.id === requestId ? data : r))
+    return data
+  }
+
+  const reopenRequest = async (requestId: string, input: ReopenRequestInput) => {
+    const requestOptions = await withClientContext<{ headers?: Record<string, string> }>({})
+    const { data } = await api.post<FeatureRequest>(`/api/feedback/${requestId}/reopen`, input, requestOptions)
     setRequests(prev => prev.map(r => r.id === requestId ? data : r))
     return data
   }
@@ -451,7 +482,8 @@ export function useFeatureRequests(currentUserId?: string, options?: UseFeatureR
     getRequest,
     submitFeedback,
     requestUpdate,
-    closeRequest }
+    closeRequest,
+    reopenRequest }
 }
 
 // Notifications Hook

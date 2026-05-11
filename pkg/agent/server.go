@@ -204,6 +204,9 @@ type Server struct {
 	// Auto-update system
 	updateChecker *UpdateChecker
 
+	resourceRetryMu    sync.Mutex
+	resourceRetryState map[string]clusterResourceRetryState
+
 	SkipKeyValidation bool // For testing purposes
 }
 
@@ -271,9 +274,10 @@ func NewServer(cfg Config) (*Server, error) {
 			return nil, fmt.Errorf("failed to generate random agent token: %w", err)
 		}
 		agentToken = generated
-		slog.Info("KC_AGENT_TOKEN is not set — auto-generated a random token for this session")
-		// Print to stdout so the operator can copy-paste it into clients.
-		fmt.Fprintf(os.Stderr, "Auto-generated KC_AGENT_TOKEN: %s\n", agentToken) //nolint:forbidigo // intentional stderr for operator UX
+		slog.Warn("KC_AGENT_TOKEN is not set — auto-generated a random token for this session; set KC_AGENT_TOKEN to pin a shared secret (docs: https://github.com/kubestellar/console#kc-agent-bridge-self-hosted-console-to-your-clusters)")
+		// Print to stderr so the operator can copy-paste it into clients.
+		fmt.Fprintf(os.Stderr, "Auto-generated KC_AGENT_TOKEN for this session: %s\n", agentToken) //nolint:forbidigo // intentional stderr for operator UX
+		fmt.Fprintln(os.Stderr, "Set KC_AGENT_TOKEN in your shell or .env to use a persistent shared secret. See https://github.com/kubestellar/console#kc-agent-bridge-self-hosted-console-to-your-clusters") //nolint:forbidigo // intentional stderr for operator UX
 	}
 
 	// Resolve per-session token quota from env, falling back to the compiled
@@ -305,19 +309,20 @@ func NewServer(cfg Config) (*Server, error) {
 
 	now := time.Now()
 	server := &Server{
-		config:            cfg,
-		kubectl:           kubectl,
-		k8sClient:         k8sClient,
-		registry:          GetRegistry(),
-		clients:           make(map[*websocket.Conn]*wsClient),
-		allowedOrigins:    allowedOrigins,
-		agentToken:        agentToken,
-		tokenExplicit:     tokenExplicit,
-		sessionStart:      now,
-		todayDate:         now.Format("2006-01-02"),
-		activeChatCtxs:    make(map[string]activeChatEntry),
-		dryRunSessions:    make(map[string]bool),
-		sessionTokenQuota: sessionQuota,
+		config:             cfg,
+		kubectl:            kubectl,
+		k8sClient:          k8sClient,
+		registry:           GetRegistry(),
+		clients:            make(map[*websocket.Conn]*wsClient),
+		allowedOrigins:     allowedOrigins,
+		agentToken:         agentToken,
+		tokenExplicit:      tokenExplicit,
+		sessionStart:       now,
+		todayDate:          now.Format("2006-01-02"),
+		activeChatCtxs:     make(map[string]activeChatEntry),
+		dryRunSessions:     make(map[string]bool),
+		resourceRetryState: make(map[string]clusterResourceRetryState),
+		sessionTokenQuota:  sessionQuota,
 	}
 
 	server.upgrader = websocket.Upgrader{

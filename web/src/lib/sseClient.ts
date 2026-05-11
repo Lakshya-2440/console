@@ -49,6 +49,8 @@ const SSE_RECONNECT_MAX_MS = 30_000
 const SSE_RECONNECT_BACKOFF_FACTOR = 2
 /** Maximum number of reconnect attempts before giving up */
 const SSE_MAX_RECONNECT_ATTEMPTS = 5
+/** HTTP statuses that indicate the SSE endpoint is unavailable for this route. */
+const SSE_NON_RETRYABLE_STATUS_CODES = [400, 401, 404, 503]
 
 // Dedup: prevent duplicate concurrent SSE requests to the same URL
 const inflightRequests = new Map<string, Promise<unknown[]>>()
@@ -376,14 +378,17 @@ export function fetchSSE<T>(options: SSEFetchOptions<T>): Promise<T[]> {
             return
           }
 
-          // Don't retry on auth (401) or service unavailable (503) — expected in demo mode
-          const is401 = err.message?.includes('401')
-          const isNonRetryable = is401 || err.message?.includes('503')
+          // Don't retry when the route cannot serve this SSE endpoint.
+          const errorMessage = err instanceof Error ? err.message : String(err)
+          const is401 = errorMessage.includes('401')
+          const isNonRetryable = SSE_NON_RETRYABLE_STATUS_CODES.some((statusCode) =>
+            errorMessage.includes(String(statusCode)),
+          )
           if (is401 && currentToken) {
             emitSseAuthFailure(fullUrl)
           }
           if (isNonRetryable) {
-            console.debug('[SSE] Non-retryable error — skipping retries (demo mode)')
+            console.debug('[SSE] Non-retryable error (endpoint unavailable or auth) — skipping retries')
             // Clear the in-flight entry and timers so future requests for the
             // same URL start a fresh stream instead of reusing this stale
             // resolved promise (#5404).
@@ -402,9 +407,10 @@ export function fetchSSE<T>(options: SSEFetchOptions<T>): Promise<T[]> {
               SSE_RECONNECT_BASE_MS * Math.pow(SSE_RECONNECT_BACKOFF_FACTOR, attemptNumber),
               SSE_RECONNECT_MAX_MS,
             )
-            console.warn(
+            const logFn = attemptNumber === 0 ? console.warn : console.debug
+            logFn(
               `[SSE] Connection failed (attempt ${attemptNumber + 1}/${SSE_MAX_RECONNECT_ATTEMPTS + 1}, ` +
-              `${accumulated.length} items so far), retrying in ${delay}ms: ${err.message}`,
+              `${accumulated.length} items so far), retrying in ${delay}ms: ${errorMessage}`,
             )
             reconnectTimerId = setTimeout(() => {
               reconnectTimerId = null
@@ -431,7 +437,7 @@ export function fetchSSE<T>(options: SSEFetchOptions<T>): Promise<T[]> {
           // retrying, so the card's lastUpdated timestamp never advanced.
           clearTimeout(timeoutId)
           cleanup(/* wasAborted */ true)
-          reject(new Error(`SSE stream error: ${err.message}`))
+          reject(new Error(`SSE stream error: ${errorMessage}`))
         })
     }
 

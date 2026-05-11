@@ -2690,7 +2690,12 @@
     "noDependencies": "No additional dependencies detected.",
     "optional": "optional",
     "deployToCluster_one": "Deploy to {{count}} cluster",
-    "deployToCluster_other": "Deploy to {{count}} clusters"
+    "deployToCluster_other": "Deploy to {{count}} clusters",
+    "chooseClusterGroup": "Choose a cluster group",
+    "deployWorkloadTo": "Deploy {{name}} to:",
+    "clusterCount_one": "{{count}} cluster",
+    "clusterCount_other": "{{count}} clusters",
+    "andMoreClusters": "+{{count}} more"
   },
   "onboarding": {
     "installTitle": "Install KubeStellar Console",
@@ -2905,5 +2910,12 @@
       "featureDemoIndicator": "<strong>Demo indicator</strong> - Both show demo badge when data.isDemo=true",
       "gapConfigSource": "<strong>Config source</strong> - Unified uses converted configs, legacy uses raw definitions"
     }
+  }
+,
+  "drasi": {
+    "statSources": "sources",
+    "statContinuousQueries": "continuous queries",
+    "statReactions": "reactions",
+    "errorLoadingResources": "Error loading Drasi resources"
   }
 }

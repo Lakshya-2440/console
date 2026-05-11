@@ -112,11 +112,47 @@ interface _CoreDNSClusterStatus {
 // ============================================================================
 
 export const getDemoPods = (): PodInfo[] => [
-  { name: 'frontend-7d8f9c4b5-x2km4', namespace: 'production', status: 'Running', ready: '1/1', restarts: 0, age: '2d', cpuRequestMillis: 500, memoryRequestBytes: 536870912, cpuUsageMillis: 320, memoryUsageBytes: 412516352, metricsAvailable: true },
-  { name: 'backend-api-6c8d7f5e4-j3ln9', namespace: 'production', status: 'Running', ready: '2/2', restarts: 1, age: '5d', cpuRequestMillis: 1000, memoryRequestBytes: 1073741824, cpuUsageMillis: 850, memoryUsageBytes: 892871680, metricsAvailable: true },
-  { name: 'ml-worker-8f9a6b7c3-k4lm2', namespace: 'ml-workloads', status: 'Running', ready: '1/1', restarts: 0, age: '1d', cpuRequestMillis: 4000, memoryRequestBytes: 8589934592, gpuRequest: 2, cpuUsageMillis: 3200, memoryUsageBytes: 7516192768, metricsAvailable: true },
-  { name: 'inference-server-5d4c3b2a1-n7op9', namespace: 'ml-workloads', status: 'Running', ready: '1/1', restarts: 2, age: '3d', cpuRequestMillis: 2000, memoryRequestBytes: 4294967296, gpuRequest: 1, cpuUsageMillis: 1850, memoryUsageBytes: 3865470566, metricsAvailable: true },
-  { name: 'cache-redis-6e5d4c3b2-q8rs1', namespace: 'production', status: 'Running', ready: '1/1', restarts: 0, age: '7d', cpuRequestMillis: 250, memoryRequestBytes: 268435456, cpuUsageMillis: 45, memoryUsageBytes: 134217728, metricsAvailable: true },
+  { name: 'frontend-7d8f9c4b5-x2km4', namespace: 'production', cluster: 'eks-prod-us-east-1', status: 'Running', ready: '1/1', restarts: 0, age: '2d', cpuRequestMillis: 500, memoryRequestBytes: 536870912, cpuUsageMillis: 320, memoryUsageBytes: 412516352, metricsAvailable: true },
+  { name: 'backend-api-6c8d7f5e4-j3ln9', namespace: 'production', cluster: 'eks-prod-us-east-1', status: 'Running', ready: '2/2', restarts: 1, age: '5d', cpuRequestMillis: 1000, memoryRequestBytes: 1073741824, cpuUsageMillis: 850, memoryUsageBytes: 892871680, metricsAvailable: true },
+  { name: 'ml-worker-8f9a6b7c3-k4lm2', namespace: 'ml-workloads', cluster: 'vllm-gpu-cluster', status: 'Running', ready: '1/1', restarts: 0, age: '1d', cpuRequestMillis: 4000, memoryRequestBytes: 8589934592, gpuRequest: 2, cpuUsageMillis: 3200, memoryUsageBytes: 7516192768, metricsAvailable: true },
+  { name: 'inference-server-5d4c3b2a1-n7op9', namespace: 'ml-workloads', cluster: 'vllm-gpu-cluster', status: 'Running', ready: '1/1', restarts: 2, age: '3d', cpuRequestMillis: 2000, memoryRequestBytes: 4294967296, gpuRequest: 1, cpuUsageMillis: 1850, memoryUsageBytes: 3865470566, metricsAvailable: true },
+  { name: 'cache-redis-6e5d4c3b2-q8rs1', namespace: 'production', cluster: 'gke-staging', status: 'Running', ready: '1/1', restarts: 0, age: '7d', cpuRequestMillis: 250, memoryRequestBytes: 268435456, cpuUsageMillis: 45, memoryUsageBytes: 134217728, metricsAvailable: true },
+  {
+    name: 'etcd-ip-10-0-12-17.ec2.internal',
+    namespace: 'kube-system',
+    cluster: 'eks-prod-us-east-1',
+    status: 'Running',
+    ready: '1/1',
+    restarts: 0,
+    age: '14d',
+    node: 'ip-10-0-12-17.ec2.internal',
+    labels: { component: 'etcd', 'app.kubernetes.io/name': 'etcd', tier: 'control-plane' },
+    containers: [{ name: 'etcd', image: 'registry.k8s.io/etcd:3.5.12-0', ready: true, state: 'running' }],
+  },
+  {
+    name: 'etcd-ip-10-0-12-42.ec2.internal',
+    namespace: 'kube-system',
+    cluster: 'eks-prod-us-east-1',
+    status: 'Running',
+    ready: '1/1',
+    restarts: 1,
+    age: '14d',
+    node: 'ip-10-0-12-42.ec2.internal',
+    labels: { component: 'etcd', 'app.kubernetes.io/name': 'etcd', tier: 'control-plane' },
+    containers: [{ name: 'etcd', image: 'registry.k8s.io/etcd:3.5.12-0', ready: true, state: 'running' }],
+  },
+  {
+    name: 'etcd-gke-staging-control-plane',
+    namespace: 'kube-system',
+    cluster: 'gke-staging',
+    status: 'Running',
+    ready: '1/1',
+    restarts: 0,
+    age: '9d',
+    node: 'gke-staging-control-plane',
+    labels: { component: 'etcd', 'app.kubernetes.io/name': 'etcd', tier: 'control-plane' },
+    containers: [{ name: 'etcd', image: 'registry.k8s.io/etcd:3.5.9-0', ready: true, state: 'running' }],
+  },
 ]
 
 export const getDemoEvents = (): ClusterEvent[] => {
@@ -147,12 +183,12 @@ export const getDemoDeploymentIssues = (): DeploymentIssue[] => [
 ]
 
 export const getDemoDeployments = (): Deployment[] => [
-  { name: 'web-frontend', namespace: 'production', cluster: 'eks-prod-us-east-1', status: 'running', replicas: 3, readyReplicas: 3, updatedReplicas: 3, availableReplicas: 3, progress: 100 },
-  { name: 'api-gateway', namespace: 'production', cluster: 'eks-prod-us-east-1', status: 'deploying', replicas: 3, readyReplicas: 1, updatedReplicas: 2, availableReplicas: 1, progress: 33 },
-  { name: 'worker-service', namespace: 'batch', cluster: 'gke-staging', status: 'deploying', replicas: 4, readyReplicas: 2, updatedReplicas: 3, availableReplicas: 2, progress: 50 },
-  { name: 'ml-inference', namespace: 'ml', cluster: 'vllm-gpu-cluster', status: 'deploying', replicas: 2, readyReplicas: 0, updatedReplicas: 1, availableReplicas: 0, progress: 0 },
-  { name: 'cache-redis', namespace: 'data', cluster: 'gke-staging', status: 'running', replicas: 3, readyReplicas: 3, updatedReplicas: 3, availableReplicas: 3, progress: 100 },
-  { name: 'monitoring-stack', namespace: 'monitoring', cluster: 'aks-dev-westeu', status: 'running', replicas: 2, readyReplicas: 2, updatedReplicas: 2, availableReplicas: 2, progress: 100 },
+  { name: 'web-frontend', namespace: 'production', cluster: 'eks-prod-us-east-1', status: 'running', replicas: 3, readyReplicas: 3, updatedReplicas: 3, availableReplicas: 3, progress: 100, image: 'nginx:1.25' },
+  { name: 'api-gateway', namespace: 'production', cluster: 'eks-prod-us-east-1', status: 'deploying', replicas: 3, readyReplicas: 1, updatedReplicas: 2, availableReplicas: 1, progress: 33, image: 'company/api-gateway:v2.5.1' },
+  { name: 'worker-service', namespace: 'batch', cluster: 'gke-staging', status: 'deploying', replicas: 4, readyReplicas: 2, updatedReplicas: 3, availableReplicas: 2, progress: 50, image: 'company/worker-service:v1.12.0' },
+  { name: 'ml-inference', namespace: 'ml', cluster: 'vllm-gpu-cluster', status: 'deploying', replicas: 2, readyReplicas: 0, updatedReplicas: 1, availableReplicas: 0, progress: 0, image: 'vllm/vllm-openai:v0.6.3' },
+  { name: 'cache-redis', namespace: 'data', cluster: 'gke-staging', status: 'running', replicas: 3, readyReplicas: 3, updatedReplicas: 3, availableReplicas: 3, progress: 100, image: 'redis:7.2-alpine' },
+  { name: 'monitoring-stack', namespace: 'monitoring', cluster: 'aks-dev-westeu', status: 'running', replicas: 2, readyReplicas: 2, updatedReplicas: 2, availableReplicas: 2, progress: 100, image: 'prom/prometheus:v2.48.0' },
 ]
 
 export const getDemoServices = (): Service[] => [

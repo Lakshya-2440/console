@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { AlertCircle, RefreshCw } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { useReportCardDataState } from '../CardDataContext'
 import { isGlobalQuantumPollingPaused } from '../../../lib/quantum/pollingContext'
 import { isQuantumForcedToDemo } from '../../../lib/demoMode'
 import { useAuth } from '../../../lib/auth'
+import { FETCH_DEFAULT_TIMEOUT_MS } from '../../../lib/constants/network'
 
 // Polling interval for qubit grid updates (adjustable for responsiveness)
 const QUBIT_GRID_DEFAULT_POLL_MS = 10000
@@ -164,6 +166,7 @@ function renderQubitSVG(pattern: string, displayPattern: readonly (readonly numb
 }
 
 export const QuantumQubitGrid: React.FC = () => {
+  const { t } = useTranslation(['cards', 'errors'])
   const { isAuthenticated, login, isLoading: authIsLoading } = useAuth()
   const [data, setData] = useState<QubitSimpleData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -214,16 +217,21 @@ export const QuantumQubitGrid: React.FC = () => {
           method: 'GET',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
+          signal: AbortSignal.timeout(FETCH_DEFAULT_TIMEOUT_MS),
         })
 
         if (!res.ok) {
           const errorBody = await res.text()
+          const fetchError = t('quantumQubitGrid.fetchFailed', {
+            defaultValue: 'Unable to load quantum qubit data',
+          })
           console.error('[QuantumQubitGrid] Request failed:', {
             status: res.status,
             statusText: res.statusText,
             body: errorBody,
           })
-          throw new Error(`API error: ${res.status} - ${errorBody}`)
+          setError(fetchError)
+          throw new Error(fetchError)
         }
 
         const result = await res.json()
@@ -241,6 +249,7 @@ export const QuantumQubitGrid: React.FC = () => {
             method: 'GET',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
+            signal: AbortSignal.timeout(FETCH_DEFAULT_TIMEOUT_MS),
           })
 
           if (statusRes.ok) {
@@ -263,7 +272,11 @@ export const QuantumQubitGrid: React.FC = () => {
           error: err instanceof Error ? err.message : String(err),
           isOnline: navigator.onLine,
         })
-        setError(err instanceof Error ? err.message : 'Unknown error')
+        setError(
+          err instanceof Error
+            ? err.message
+            : t('messages.unknownError', { ns: 'errors', defaultValue: 'Unknown error' })
+        )
         setConsecutiveFailures(prev => prev + 1)
       } finally {
         setIsLoading(false)
@@ -279,7 +292,7 @@ export const QuantumQubitGrid: React.FC = () => {
       }
     }, refreshInterval)
     return () => clearInterval(interval)
-  }, [refreshInterval, isQuantumForcedToDemo])
+  }, [refreshInterval, t])
 
   // Get the label for the currently selected mask
   const patternLabel = useMemo(() => {

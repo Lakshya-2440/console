@@ -19,6 +19,21 @@ export const MODAL_TIMEOUT_MS = 5_000
 /** Timeout for navigation to complete */
 export const NAV_TIMEOUT_MS = 15_000
 
+const LOCAL_AGENT_HTTP_PATTERNS = [
+  'http://127.0.0.1:8585/**',
+  'http://localhost:8585/**',
+  'https://127.0.0.1:8585/**',
+  'https://localhost:8585/**',
+] as const
+const LOCAL_AGENT_WS_PATTERNS = [
+  'ws://127.0.0.1:8585/**',
+  'ws://localhost:8585/**',
+  'wss://127.0.0.1:8585/**',
+  'wss://localhost:8585/**',
+] as const
+const LOCAL_AGENT_UNAVAILABLE_STATUS = 503
+const LOCAL_AGENT_UNAVAILABLE_MESSAGE = 'agent not running'
+
 // ---------------------------------------------------------------------------
 // Mock user returned from /api/me in demo/test mode
 // See #9075 — smoke tests must mock /api/me so AuthProvider does not try
@@ -93,6 +108,8 @@ export const EXPECTED_ERROR_PATTERNS = [
   /\[CacheWorkerRpc\] Worker error/i, // Cache worker failures in CI (#11660)
   /\[mockApiFallback\]/i, // Test mock logging that leaks to browser console (#11660)
   /Error fetching from cluster/i, // Cluster fetch errors when backend is unavailable (#11660)
+  /\[SSE\] Connection failed/i, // SSE retry warnings for offline clusters (#12742)
+  /\[SSE\] .*retr/i, // SSE retry-related messages (backoff, exhaustion) (#12742)
 ]
 
 function isExpectedError(message: string): boolean {
@@ -165,6 +182,37 @@ export async function mockApiMe(page: Page) {
       body: JSON.stringify(MOCK_DEMO_USER),
     })
   )
+}
+
+export async function mockLocalAgentUnavailable(page: Page) {
+  for (const pattern of LOCAL_AGENT_HTTP_PATTERNS) {
+    await page.route(pattern, (route) =>
+      route.fulfill({
+        status: LOCAL_AGENT_UNAVAILABLE_STATUS,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: LOCAL_AGENT_UNAVAILABLE_MESSAGE }),
+      })
+    )
+  }
+
+  for (const pattern of LOCAL_AGENT_WS_PATTERNS) {
+    await page.routeWebSocket(pattern, (ws) => {
+      ws.onMessage((data) => {
+        try {
+          const message = JSON.parse(String(data)) as { id?: string | number }
+          if (typeof message.id !== 'undefined') {
+            ws.send(JSON.stringify({
+              id: message.id,
+              type: 'error',
+              payload: { error: LOCAL_AGENT_UNAVAILABLE_MESSAGE },
+            }))
+          }
+        } catch {
+          // Ignore malformed test traffic.
+        }
+      })
+    })
+  }
 }
 
 /**
@@ -518,9 +566,12 @@ export async function setupDemoMode(page: Page) {
   // Seed localStorage before page scripts execute — prevents the app from
   // briefly rendering the /login screen before the demo flag is picked up.
   await page.addInitScript(() => {
+    localStorage.removeItem('kc-has-session')
+    localStorage.removeItem('kc-update-channel')
+    localStorage.removeItem('kc-releases-cache')
+    localStorage.removeItem('kc-auth-token')
     localStorage.setItem('token', 'demo-token')
     localStorage.setItem('kc-demo-mode', 'true')
-    localStorage.setItem('kc-has-session', 'true')
     localStorage.setItem('demo-user-onboarded', 'true')
     localStorage.setItem('kc-backend-status', JSON.stringify({
       available: true,

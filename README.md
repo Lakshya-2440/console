@@ -39,7 +39,7 @@ The quickest path to a working console with your own data. `start.sh` downloads 
 curl -sSL https://raw.githubusercontent.com/kubestellar/console/main/start.sh | bash
 ```
 
-Deploy into a cluster instead with [`deploy.sh`](deploy.sh) (`--openshift`, `--ingress <host>`, `--github-oauth`, `--uninstall`).
+Deploy into a cluster instead with [`deploy.sh`](deploy.sh) (`--openshift`, `--ingress <host>`, `--github-oauth`, `--uninstall`). For Helm chart installs that should talk to an in-cluster Kagenti backend, see [Connecting Kagenti](deploy/helm/kubestellar-console/README.md#connecting-kagenti).
 
 ## kc-agent (bridge self-hosted console to your clusters)
 
@@ -58,6 +58,19 @@ brew tap kubestellar/tap && brew install kc-agent
 # Linux / from source — requires Go 1.25+ (matches go.mod)
 mkdir -p bin
 go build -o bin/kc-agent ./cmd/kc-agent && ./bin/kc-agent
+```
+
+### kc-agent authentication (`KC_AGENT_TOKEN`)
+
+`kc-agent` accepts a shared secret via `KC_AGENT_TOKEN`. When it is set, browser and WebSocket requests to the agent must present `Authorization: Bearer <token>` (or `?token=<token>` for a real WebSocket upgrade). This is recommended when you want an extra layer of protection against other local processes reaching `127.0.0.1:8585`.
+
+- `start-dev.sh` and `startup-oauth.sh` auto-generate a random `KC_AGENT_TOKEN` for each session if you do not set one.
+- Set `KC_AGENT_TOKEN` yourself if you want a stable secret across restarts or if you launch `kc-agent` manually.
+- Generate one with `openssl rand -hex 32`.
+
+```bash
+export KC_AGENT_TOKEN="$(openssl rand -hex 32)"
+./bin/kc-agent
 ```
 
 When both the self-hosted console and `kc-agent` are running, open [http://localhost:8080](http://localhost:8080) and your local clusters appear in the cluster picker.

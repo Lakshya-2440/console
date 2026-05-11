@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import type { FeedbackDraft } from '../../hooks/useFeedbackDrafts'
 import * as FeatureRequestModalModule from './FeatureRequestModal'
 import { FeatureRequestModal } from './FeatureRequestModal'
 
@@ -7,6 +8,7 @@ import { FeatureRequestModal } from './FeatureRequestModal'
 // createRequest is declared outside the factory so individual tests can
 // swap its implementation (e.g. to simulate a successful submission).
 const createRequestMock = vi.fn()
+const mockDrafts: FeedbackDraft[] = []
 
 vi.mock('../../hooks/useFeatureRequests', () => ({
   useFeatureRequests: () => ({
@@ -40,9 +42,10 @@ vi.mock('../../hooks/useRewards', () => ({
 }))
 
 vi.mock('../../hooks/useFeedbackDrafts', () => ({
+  extractDraftTitle: (description: string) => description.split('\n')[0]?.trim() || 'Untitled draft',
   useFeedbackDrafts: () => ({
-    drafts: [],
-    draftCount: 0,
+    drafts: mockDrafts,
+    draftCount: mockDrafts.length,
     recentlyDeletedDrafts: [],
     recentlyDeletedCount: 0,
     saveDraft: vi.fn(),
@@ -58,15 +61,30 @@ vi.mock('../ui/Toast', () => ({
   useToast: () => ({ showToast: vi.fn() }),
 }))
 
+vi.mock('../../lib/imageCompression', () => ({
+  compressScreenshot: vi.fn(async (preview: string) => preview),
+}))
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (_k: string, fallback?: string) => fallback || _k }),
   initReactI18next: { type: '3rdParty', init: vi.fn() },
 }))
 
+const createFetchResponse = (hasToken: boolean) => ({
+  ok: true,
+  json: vi.fn().mockResolvedValue({ hasToken }),
+})
+
 describe('FeatureRequestModal Component', () => {
   beforeEach(() => {
     document.body.innerHTML = ''
     createRequestMock.mockReset()
+    mockDrafts.length = 0
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(createFetchResponse(true)))
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
   })
 
   it('exports FeatureRequestModal component', () => {
@@ -103,6 +121,28 @@ describe('FeatureRequestModal Component', () => {
     // Parent's onClose must have been called exactly once
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
   })
+
+  it('warns before switching away from Submit when unsaved report content exists', async () => {
+    render(<FeatureRequestModal isOpen onClose={vi.fn()} initialTab="submit" />)
+
+    const textarea = await screen.findByRole('textbox')
+    fireEvent.change(textarea, { target: { value: 'Unsaved draft content that should trigger a warning.' } })
+
+    fireEvent.click(screen.getByRole('button', { name: /Drafts/i }))
+
+    expect(await screen.findByText(/Save Draft & Switch/i)).toBeInTheDocument()
+    expect(await screen.findByText(/Switch Without Saving/i)).toBeInTheDocument()
+    expect(screen.getByRole('textbox')).toHaveValue('Unsaved draft content that should trigger a warning.')
+
+    fireEvent.click(screen.getByText(/Switch Without Saving/i))
+
+    await waitFor(() => {
+      expect(screen.getByText(/^No saved drafts$/i)).toBeInTheDocument()
+      expect(screen.queryByText(/Save Draft & Switch/i)).not.toBeInTheDocument()
+    })
+  })
+
+
 
   // Regression test for Issue 9358 — after a successful submission the
   // form shows the "Request Submitted" confirmation view. Clicking Close
@@ -153,6 +193,45 @@ describe('FeatureRequestModal Component', () => {
     expect(screen.queryByText(/Save Draft & Close/i)).not.toBeInTheDocument()
   })
 
+  it('rechecks backend token status each time the modal reopens', async () => {
+    const fetchMock = vi.mocked(global.fetch)
+    const tokenStatusResponses = [
+      createFetchResponse(false) as Response,
+      createFetchResponse(true) as Response,
+    ]
+    const getUrl = (input: string | URL | Request) =>
+      typeof input === 'string' || input instanceof URL ? input.toString() : input.url
+    const getTokenStatusCallCount = () => fetchMock.mock.calls.filter(([input]) =>
+      getUrl(input as string | URL | Request).includes('/api/github/token/status')
+    ).length
+
+    fetchMock.mockImplementation(async (input: string | URL | Request) => {
+      if (getUrl(input).includes('/api/github/token/status')) {
+        return tokenStatusResponses.shift() ?? (createFetchResponse(true) as Response)
+      }
+      return createFetchResponse(true) as Response
+    })
+
+    const { rerender } = render(<FeatureRequestModal isOpen onClose={vi.fn()} initialTab="submit" />)
+
+    await waitFor(() => expect(getTokenStatusCallCount()).toBe(1))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^Submit/i })).toHaveAttribute(
+        'title',
+        expect.stringContaining('FEEDBACK_GITHUB_TOKEN is not configured'),
+      )
+    }, { timeout: 5000 })
+
+    rerender(<FeatureRequestModal isOpen={false} onClose={vi.fn()} initialTab="submit" />)
+    rerender(<FeatureRequestModal isOpen onClose={vi.fn()} initialTab="submit" />)
+
+    await waitFor(() => expect(getTokenStatusCallCount()).toBe(2))
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^Submit/i })).not.toHaveAttribute('title')
+      expect(screen.queryByText(/GitHub integration not configured/i)).not.toBeInTheDocument()
+    })
+  })
+
   it('shows re-authentication guidance and a direct GitHub fallback for 403 permission errors', async () => {
     createRequestMock.mockRejectedValue(new Error(JSON.stringify({
       error: 'GitHub could not create the issue because the current token does not have permission to open issues in this repository. Re-authenticate with GitHub OAuth and try again, or open the issue directly on GitHub.',
@@ -175,5 +254,58 @@ describe('FeatureRequestModal Component', () => {
       'href',
       expect.stringContaining('https://github.com/kubestellar/console/issues/new'),
     )
+  })
+
+  it('restores draft data URI attachments as uploadable files', async () => {
+    const restoredPreview = 'data:image/png;base64,ZmFrZS1wbmctYnl0ZXM='
+    mockDrafts.push({
+      id: 'draft-with-image',
+      requestType: 'bug',
+      targetRepo: 'console',
+      description: 'Restored draft title\nThis restored draft contains enough detail to be submitted with an attachment.',
+      savedAt: '2025-01-01T00:00:00.000Z',
+      updatedAt: '2025-01-01T00:00:00.000Z',
+      screenshots: [restoredPreview],
+    })
+    createRequestMock.mockResolvedValue({
+      github_issue_url: 'https://github.com/kubestellar/console/issues/12824',
+      screenshots_uploaded: 1,
+      screenshots_failed: 0,
+    })
+
+    render(<FeatureRequestModal isOpen onClose={vi.fn()} initialTab="drafts" />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^Edit$/i }))
+    await screen.findByText(/Editing a saved draft/i)
+
+    fireEvent.click(screen.getByRole('button', { name: /^Submit/i }))
+
+    await waitFor(() => expect(createRequestMock).toHaveBeenCalledTimes(1))
+    expect(createRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({ screenshots: [restoredPreview] }),
+      expect.objectContaining({ timeout: expect.any(Number) }),
+    )
+  })
+
+  it('rejects restored draft attachments that still have zero bytes', async () => {
+    mockDrafts.push({
+      id: 'draft-with-invalid-image',
+      requestType: 'bug',
+      targetRepo: 'console',
+      description: 'Broken restored draft\nThis draft includes an attachment preview that cannot be reconstructed into a real file.',
+      savedAt: '2025-01-01T00:00:00.000Z',
+      updatedAt: '2025-01-01T00:00:00.000Z',
+      screenshots: ['not-a-data-uri'],
+    })
+
+    render(<FeatureRequestModal isOpen onClose={vi.fn()} initialTab="drafts" />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^Edit$/i }))
+    await screen.findByText(/Editing a saved draft/i)
+
+    fireEvent.click(screen.getByRole('button', { name: /^Submit/i }))
+
+    await screen.findByText(/could not be restored/i)
+    expect(createRequestMock).not.toHaveBeenCalled()
   })
 })

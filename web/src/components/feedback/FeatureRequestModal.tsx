@@ -21,18 +21,77 @@ import type { FeedbackDraft } from '../../hooks/useFeedbackDrafts'
 
 // Split sub-components
 import type { FeatureRequestModalProps, TabType, ScreenshotItem, SuccessState } from './FeatureRequestTypes'
-import { MIN_DRAFT_LENGTH, SUCCESS_DISPLAY_MS } from './FeatureRequestTypes'
+import { MIN_DRAFT_LENGTH, SUCCESS_DISPLAY_MS, EMPTY_FILE_SIZE_BYTES } from './FeatureRequestTypes'
 import { DiscardConfirmDialog, LoginPromptDialog, FullscreenPreview, ScreenshotPreviewOverlay } from './FeedbackDialogs'
 import { DraftsTab } from './DraftsTab'
 import { UpdatesTab } from './UpdatesTab'
 import { SubmitForm, SuccessView, SubmitFooter } from './SubmitTab'
+
+const DRAFT_ATTACHMENT_INDEX_OFFSET = 1
+const FIRST_CHARACTER_INDEX = 0
+const DATA_URI_PART_LIMIT = 2
+const DATA_URI_PREFIX = 'data:'
+const DATA_URI_BASE64_MARKER = ';base64'
+const DEFAULT_DRAFT_ATTACHMENT_MIME_TYPE = 'image/png'
+const DEFAULT_DRAFT_ATTACHMENT_EXTENSION = 'png'
+
+function getDraftAttachmentMediaType(mimeType: string): ScreenshotItem['mediaType'] {
+  return mimeType.startsWith('video/') ? 'video' : 'image'
+}
+
+function getDraftAttachmentFilename(index: number, mimeType: string): string {
+  const extension = mimeType.split('/').pop() || DEFAULT_DRAFT_ATTACHMENT_EXTENSION
+  return `draft-screenshot-${index + DRAFT_ATTACHMENT_INDEX_OFFSET}.${extension}`
+}
+
+function createEmptyDraftAttachment(index: number, mimeType: string): File {
+  return new File([], getDraftAttachmentFilename(index, mimeType), { type: mimeType })
+}
+
+function restoreDraftAttachment(preview: string, index: number): ScreenshotItem {
+  if (!preview.startsWith(DATA_URI_PREFIX)) {
+    return {
+      file: createEmptyDraftAttachment(index, DEFAULT_DRAFT_ATTACHMENT_MIME_TYPE),
+      preview,
+      mediaType: 'image',
+    }
+  }
+
+  const [header, encodedBody] = preview.split(',', DATA_URI_PART_LIMIT)
+  const mimeType = header.match(/:(.*?)(;|$)/)?.[1] || DEFAULT_DRAFT_ATTACHMENT_MIME_TYPE
+  const mediaType = getDraftAttachmentMediaType(mimeType)
+
+  if (!header.includes(DATA_URI_BASE64_MARKER) || !encodedBody) {
+    return {
+      file: createEmptyDraftAttachment(index, mimeType),
+      preview,
+      mediaType,
+    }
+  }
+
+  try {
+    const binary = atob(encodedBody)
+    const bytes = Uint8Array.from(binary, char => char.codePointAt(FIRST_CHARACTER_INDEX) ?? EMPTY_FILE_SIZE_BYTES)
+    return {
+      file: new File([bytes], getDraftAttachmentFilename(index, mimeType), { type: mimeType }),
+      preview,
+      mediaType,
+    }
+  } catch {
+    return {
+      file: createEmptyDraftAttachment(index, mimeType),
+      preview,
+      mediaType,
+    }
+  }
+}
 
 export function FeatureRequestModal({ isOpen, onClose, initialTab, initialRequestType, initialContext }: FeatureRequestModalProps) {
   const { t } = useTranslation()
   const { user, isAuthenticated, token } = useAuth()
   const { showToast } = useToast()
   const currentGitHubLogin = user?.github_login || ''
-  const { createRequest, isSubmitting, requests, isLoading: requestsLoading, isRefreshing: requestsRefreshing, refresh: refreshRequests, requestUpdate, closeRequest, isDemoMode: isInDemoMode } = useFeatureRequests(currentGitHubLogin)
+  const { createRequest, isSubmitting, requests, isLoading: requestsLoading, isRefreshing: requestsRefreshing, refresh: refreshRequests, requestUpdate, closeRequest, reopenRequest, isDemoMode: isInDemoMode } = useFeatureRequests(currentGitHubLogin)
   const { isRefreshing: notificationsRefreshing, refresh: refreshNotifications, getUnreadCountForRequest, markRequestNotificationsAsRead } = useNotifications()
   const { githubRewards, githubPoints, refreshGitHubRewards } = useRewards()
   const { drafts, draftCount, recentlyDeletedDrafts, recentlyDeletedCount, saveDraft, deleteDraft, permanentlyDeleteDraft, restoreDeletedDraft, clearAllDrafts, emptyRecentlyDeleted } = useFeedbackDrafts()
@@ -57,12 +116,14 @@ export function FeatureRequestModal({ isOpen, onClose, initialTab, initialReques
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<SuccessState | null>(null)
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false)
+  const [pendingTabSwitch, setPendingTabSwitch] = useState<TabType | null>(null)
   const [showLoginPrompt, setShowLoginPrompt] = useState(false)
   const [showSetupDialog, setShowSetupDialog] = useState(false)
   const [feedbackTokenMissing, setFeedbackTokenMissing] = useState(false)
   const [screenshots, setScreenshots] = useState<ScreenshotItem[]>([])
   const [isPreviewFullscreen, setIsPreviewFullscreen] = useState(false)
   const [previewImageSrc, setPreviewImageSrc] = useState<string | null>(null)
+  const hasUnsavedSubmitContent = !success && (description.trim() !== '' || screenshots.length > 0)
 
   // Pre-fill description when opened from a card's bug button (only once on open)
   const prevOpenRef = useRef(false)
@@ -76,23 +137,32 @@ export function FeatureRequestModal({ isOpen, onClose, initialTab, initialReques
   }, [isOpen, initialContext])
 
   // Check whether FEEDBACK_GITHUB_TOKEN is configured on the backend
-  const tokenCheckedRef = useRef(false)
   useEffect(() => {
-    if (!isOpen || tokenCheckedRef.current || isDemoModeForced) return
-    tokenCheckedRef.current = true
+    if (!isOpen) {
+      setFeedbackTokenMissing(false)
+      return
+    }
+    if (isDemoModeForced) return
+
+    setFeedbackTokenMissing(false)
+    let isCurrent = true
 
     fetch(`${BACKEND_DEFAULT_URL}/api/github/token/status`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       signal: AbortSignal.timeout(FETCH_DEFAULT_TIMEOUT_MS) })
       .then(res => res.ok ? res.json() : null)
       .then(data => {
-        if (data && !data.hasToken) {
-          setFeedbackTokenMissing(true)
+        if (isCurrent && data) {
+          setFeedbackTokenMissing(!data.hasToken)
         }
       })
       .catch(() => {
         // Silently ignore — backend may not be reachable (e.g. demo mode)
       })
+
+    return () => {
+      isCurrent = false
+    }
   }, [isOpen, token])
 
   const handleRefreshGitHub = async () => {
@@ -117,7 +187,7 @@ export function FeatureRequestModal({ isOpen, onClose, initialTab, initialReques
   const handleSaveDraft = () => {
     if (description.trim().length < MIN_DRAFT_LENGTH) {
       showToast('Draft is too short to save', 'error')
-      return
+      return false
     }
     const screenshotDataURIs = screenshots.map(s => s.preview)
     const id = saveDraft(
@@ -127,7 +197,9 @@ export function FeatureRequestModal({ isOpen, onClose, initialTab, initialReques
     if (id) {
       setEditingDraftId(id)
       showToast(editingDraftId ? 'Draft updated' : 'Draft saved', 'success')
+      return true
     }
+    return false
   }
 
   const handleRestoreDraft = (draft: FeedbackDraft) => {
@@ -135,13 +207,16 @@ export function FeatureRequestModal({ isOpen, onClose, initialTab, initialReques
     setTargetRepo(draft.targetRepo)
     setDescription(draft.description)
     setEditingDraftId(draft.id)
-    const restoredScreenshots = (draft.screenshots || []).map((preview, idx) => ({
-      file: new File([], `draft-screenshot-${idx + 1}.png`, { type: 'image/png' }),
-      preview,
-    }))
+    const restoredScreenshots = (draft.screenshots || []).map(restoreDraftAttachment)
+    const invalidAttachmentCount = restoredScreenshots.filter(({ file }) => file.size === EMPTY_FILE_SIZE_BYTES).length
     setScreenshots(restoredScreenshots)
     setActiveTab('submit')
-    showToast('Draft loaded into editor', 'success')
+    showToast(
+      invalidAttachmentCount > EMPTY_FILE_SIZE_BYTES
+        ? t('drafts.restoreRequiresReattach', 'Draft loaded, but one or more attachments must be re-attached before submitting')
+        : t('drafts.loadedIntoEditor', 'Draft loaded into editor'),
+      invalidAttachmentCount > EMPTY_FILE_SIZE_BYTES ? 'error' : 'success',
+    )
   }
 
   const handleDeleteDraft = (id: string) => {
@@ -189,12 +264,14 @@ export function FeatureRequestModal({ isOpen, onClose, initialTab, initialReques
   // BaseModal's onClose prop and re-registering the keydown listener.
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
-  const descriptionRef = useRef(description)
-  descriptionRef.current = description
   const isSubmittingRef = useRef(isSubmitting)
   isSubmittingRef.current = isSubmitting
   const showDiscardRef = useRef(showDiscardConfirm)
   showDiscardRef.current = showDiscardConfirm
+  const pendingTabSwitchRef = useRef(pendingTabSwitch)
+  pendingTabSwitchRef.current = pendingTabSwitch
+  const hasUnsavedSubmitContentRef = useRef(hasUnsavedSubmitContent)
+  hasUnsavedSubmitContentRef.current = hasUnsavedSubmitContent
   // Issue 9358: after a successful submission the form is showing the
   // "Request Submitted" confirmation view. The description/screenshots
   // state may still be populated (we clear it on the SUCCESS_DISPLAY_MS
@@ -207,6 +284,7 @@ export function FeatureRequestModal({ isOpen, onClose, initialTab, initialReques
     // Hide the discard confirmation first so a stale ref can't cause
     // handleClose to re-open it on the next paint.
     setShowDiscardConfirm(false)
+    setPendingTabSwitch(null)
     setDescription('')
     setRequestType(initialRequestType || 'bug')
     setTargetRepo('console')
@@ -223,12 +301,17 @@ export function FeatureRequestModal({ isOpen, onClose, initialTab, initialReques
   }, [initialRequestType, initialTab])
 
   const handleSaveAndClose = useCallback(() => {
-    handleSaveDraft()
-    forceClose()
+    if (handleSaveDraft()) {
+      forceClose()
+    }
   }, [handleSaveDraft, forceClose])
 
   const handleClose = useCallback(() => {
     if (isSubmittingRef.current) return
+    if (pendingTabSwitchRef.current) {
+      setPendingTabSwitch(null)
+      return
+    }
     // If the discard dialog is already showing, an Esc/Space coming from
     // BaseModal's keydown handler must NOT just re-set the same flag —
     // that traps the user. Treat the second close attempt as Discard.
@@ -244,12 +327,35 @@ export function FeatureRequestModal({ isOpen, onClose, initialTab, initialReques
       forceClose()
       return
     }
-    if (descriptionRef.current.trim() !== '') {
+    if (hasUnsavedSubmitContentRef.current) {
       setShowDiscardConfirm(true)
       return
     }
     forceClose()
   }, [forceClose])
+
+  const handleTabChange = useCallback((nextTab: TabType) => {
+    if (nextTab === activeTab) return
+    if (activeTab === 'submit' && nextTab !== 'submit' && hasUnsavedSubmitContent) {
+      setPendingTabSwitch(nextTab)
+      return
+    }
+    setActiveTab(nextTab)
+  }, [activeTab, hasUnsavedSubmitContent])
+
+  const handleDiscardAndSwitchTab = useCallback(() => {
+    if (!pendingTabSwitch) return
+    setPendingTabSwitch(null)
+    setActiveTab(pendingTabSwitch)
+  }, [pendingTabSwitch])
+
+  const handleSaveDraftAndSwitchTab = useCallback(() => {
+    if (!pendingTabSwitch) return
+    if (handleSaveDraft()) {
+      setPendingTabSwitch(null)
+      setActiveTab(pendingTabSwitch)
+    }
+  }, [handleSaveDraft, pendingTabSwitch])
 
   return (
     <BaseModal
@@ -266,6 +372,18 @@ export function FeatureRequestModal({ isOpen, onClose, initialTab, initialReques
           onSaveAndClose={handleSaveAndClose}
           onDiscard={forceClose}
           onKeepEditing={() => setShowDiscardConfirm(false)}
+        />
+      )}
+
+      {pendingTabSwitch && (
+        <DiscardConfirmDialog
+          onSaveAndClose={handleSaveDraftAndSwitchTab}
+          onDiscard={handleDiscardAndSwitchTab}
+          onKeepEditing={() => setPendingTabSwitch(null)}
+          message={t('feedback.unsavedTabSwitchPrompt', 'You have unsaved report content. Save it as a draft before switching tabs?')}
+          saveLabel={t('feedback.saveDraftAndSwitch', 'Save Draft & Switch')}
+          discardLabel={t('feedback.switchWithoutSaving', 'Switch Without Saving')}
+          keepEditingLabel={t('common:common.keepEditing', 'Keep editing')}
         />
       )}
 
@@ -316,7 +434,7 @@ export function FeatureRequestModal({ isOpen, onClose, initialTab, initialReques
       {/* Tabs */}
       <div className="flex border-b border-border shrink-0">
             <button
-              onClick={() => setActiveTab('submit')}
+              onClick={() => handleTabChange('submit')}
               className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors ${
                 activeTab === 'submit'
                   ? 'text-foreground border-b-2 border-purple-500'
@@ -326,7 +444,7 @@ export function FeatureRequestModal({ isOpen, onClose, initialTab, initialReques
               {t('feedback.submit')}
             </button>
             <button
-              onClick={() => setActiveTab('drafts')}
+              onClick={() => handleTabChange('drafts')}
               className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
                 activeTab === 'drafts'
                   ? 'text-foreground border-b-2 border-purple-500'
@@ -341,7 +459,7 @@ export function FeatureRequestModal({ isOpen, onClose, initialTab, initialReques
               )}
             </button>
             <button
-              onClick={() => setActiveTab('updates')}
+              onClick={() => handleTabChange('updates')}
               className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
                 activeTab === 'updates'
                   ? 'text-foreground border-b-2 border-purple-500'
@@ -383,7 +501,7 @@ export function FeatureRequestModal({ isOpen, onClose, initialTab, initialReques
             editingDraftId={editingDraftId}
             confirmDeleteDraft={confirmDeleteDraft}
             showClearAllDrafts={showClearAllDrafts}
-            onSetActiveTab={setActiveTab}
+            onSetActiveTab={handleTabChange}
             onRestoreDraft={handleRestoreDraft}
             onDeleteDraft={handleDeleteDraft}
             onPermanentlyDeleteDraft={permanentlyDeleteDraft}
@@ -412,6 +530,7 @@ export function FeatureRequestModal({ isOpen, onClose, initialTab, initialReques
             isGitHubRefreshing={isGitHubRefreshing}
             onRequestUpdate={requestUpdate}
             onCloseRequest={closeRequest}
+            onReopenRequest={reopenRequest}
             getUnreadCountForRequest={getUnreadCountForRequest}
             markRequestNotificationsAsRead={markRequestNotificationsAsRead}
             onShowLoginPrompt={() => setShowLoginPrompt(true)}
@@ -473,7 +592,7 @@ export function FeatureRequestModal({ isOpen, onClose, initialTab, initialReques
           onClose={handleClose}
           onSaveDraft={handleSaveDraft}
           onShowLoginPrompt={() => setShowLoginPrompt(true)}
-          onSetActiveTab={setActiveTab}
+          onSetActiveTab={handleTabChange}
         />
       </div>
 

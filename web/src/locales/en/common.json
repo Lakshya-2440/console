@@ -22,6 +22,7 @@
     "edit": "Edit",
     "save": "Save",
     "cancel": "Cancel",
+    "done": "Done",
     "close": "Close",
     "clear": "Clear",
     "clearAll": "Clear All",
@@ -168,7 +169,21 @@
       "analyzed_other": "Analyzed {{count}} page visits. Sidebar updated based on your most visited pages.",
       "notEnoughData": "Not enough navigation data yet. Keep using the console and try again later!",
       "recommendedDashboards": "Recommended Dashboards",
-      "addTopicDashboards": "Add topic-specific dashboards to your sidebar"
+      "addTopicDashboards": "Add topic-specific dashboards to your sidebar",
+      "searchPlaceholder": "Search dashboards...",
+      "searchHint": "Search for a dashboard to add to your sidebar",
+      "noMatchingDashboards": "No matching dashboards found",
+      "availableToAdd": "Available to Add",
+      "autoOrganize": "Auto-organize",
+      "autoOrganizeTooltip": "Reorders your dashboards by most visited and adds any missing ones you use frequently",
+      "resetSidebar": "Reset Sidebar",
+      "resetSidebarTooltip": "Restore the default sidebar navigation items",
+      "proposedChanges": "Proposed Changes",
+      "applyChanges": "Apply Changes",
+      "cancel": "Cancel",
+      "yourDashboards": "Your Dashboards",
+      "noChangesNeeded": "No changes needed — your sidebar already matches your usage.",
+      "appliedChanges": "Applied {{count}} changes"
     }
   },
   "settings": {
@@ -219,7 +234,27 @@
       "kagentAgents": "Kagent Agents",
       "kagentiAgents": "Kagenti Agents",
       "noKagentAgents": "No kagent agents found. Agents may not be deployed yet.",
-      "noKagentiAgents": "No kagenti agents found. Agents may not be deployed yet."
+      "noKagentiAgents": "No kagenti agents found. Agents may not be deployed yet.",
+      "providerConfigTitle": "Kagenti LLM configuration",
+      "currentProvider": "Current provider",
+      "providerSelector": "Provider",
+      "providerUnknown": "Unknown",
+      "apiKeyLabel": "API key",
+      "apiKeyPlaceholder": "Enter a new API key",
+      "apiKeyHint": "Paste a new key to save it for the selected provider.",
+      "apiKeyMaskedHint": "A key is already stored for this provider. Leave this blank to keep the current key.",
+      "apiKeyRequired": "Enter an API key or keep an existing key for the selected provider.",
+      "save": "Save",
+      "saving": "Saving...",
+      "saveSuccess": "Saved. Kagenti will roll out with the updated provider configuration.",
+      "saveFailed": "Failed to save Kagenti provider settings.",
+      "rolloutHint": "Saving updates the Kagenti secret and triggers a deployment rollout.",
+      "configUnsupported": "Provider configuration is only available when the console runs in-cluster with Kagenti RBAC.",
+      "providers": {
+        "gemini": "Gemini",
+        "anthropic": "Anthropic",
+        "openai": "OpenAI"
+      }
     },
     "localAgent": "Local Agent",
     "groups": {
@@ -564,6 +599,23 @@
       "vclusterCreateNew": "Create Virtual Cluster",
       "vclusterDefaultNamespace": "vcluster",
       "vclusterDeleteConfirm": "Delete virtual cluster \"{{name}}\" in namespace \"{{namespace}}\"? This cannot be undone.",
+      "vclusterFeedback": {
+        "connect": {
+          "pending": "Connecting to vCluster \"{{name}}\"...",
+          "success": "Connected to vCluster \"{{name}}\".",
+          "errorFallback": "Failed to connect to vCluster \"{{name}}\"."
+        },
+        "disconnect": {
+          "pending": "Disconnecting from vCluster \"{{name}}\"...",
+          "success": "Disconnected from vCluster \"{{name}}\".",
+          "errorFallback": "Failed to disconnect from vCluster \"{{name}}\"."
+        },
+        "delete": {
+          "pending": "Deleting vCluster \"{{name}}\" from namespace \"{{namespace}}\"...",
+          "success": "Deleted vCluster \"{{name}}\" from namespace \"{{namespace}}\".",
+          "errorFallback": "Failed to delete vCluster \"{{name}}\" from namespace \"{{namespace}}\"."
+        }
+      },
       "selectHostCluster": "Select a host cluster...",
       "kubevirtSection": "KubeVirt",
       "kubevirtDesc": "Run virtual machines on Kubernetes clusters",
@@ -1795,7 +1847,11 @@
     "copy": "Copy",
     "copied": "Copied",
     "flowLabel": "Flow",
-    "flowAllResources": "All resources"
+    "flowAllResources": "All resources",
+    "statSources": "sources",
+    "statContinuousQueries": "continuous queries",
+    "statReactions": "reactions",
+    "errorLoadingResources": "Error loading Drasi resources"
   },
   "missionChat": {
     "saveTranscript": "Save transcript",
@@ -1838,6 +1894,8 @@
   "agent": {
     "connectingToAgent": "Connecting to agent...",
     "noAgentsAvailable": "No AI agents available",
+    "noProvidersDescription": "API keys for cloud AI providers are configured via environment variables. Set the variables below and restart the console to enable AI features.",
+    "noProvidersTitle": "No API Providers Available",
     "demoMode": "Demo Mode",
     "demoModeTitle": "Demo Mode - showing sample data",
     "degraded": "Degraded",
@@ -1905,6 +1963,8 @@
     "installAgentPrompt": "Install and start the local agent to configure API keys.",
     "runInstallCommand": "Run this command to install:",
     "retryConnection": "Retry Connection",
+    "envVarsTitle": "Environment Variables",
+    "envVarsHint": "Set these in your .env file or shell environment, then restart the console.",
     "validationFailedModel": "API key validation failed - the model may not be available for your account",
     "invalidApiKey": "Invalid API key - please check and try again",
     "rateLimitExceeded": "Rate limit exceeded - please try again later",
@@ -2037,7 +2097,31 @@
     "authGateTitle": "Login required to submit feedback",
     "authGateBodyDemo": "This is a public demo — GitHub login requires your own KubeStellar Console instance. Log in or install locally before filling out the form so your draft is not lost.",
     "authGateBodyLocal": "Set up a GitHub OAuth app (or log in if already configured) before filling out the form so your draft is not lost.",
+    "unsavedDraftPrompt": "You have unsaved content. Would you like to save it as a draft for later?",
+    "unsavedTabSwitchPrompt": "You have unsaved report content. Save it as a draft before switching tabs?",
+    "saveDraftAndClose": "Save Draft & Close",
+    "saveDraftAndSwitch": "Save Draft & Switch",
+    "switchWithoutSaving": "Switch Without Saving",
     "requestSubmitted": "Request Submitted!",
+    "fixMerged": "Merged",
+    "fixMergedDescription": "Thank you for your feedback! Your {{requestType}} has been merged and will be available in the next nightly build and weekly release.",
+    "requestTypeBugFix": "bug fix",
+    "requestTypeFeature": "feature",
+    "awaitingVerificationBadge": "Awaiting verification",
+    "awaitingVerificationQuestion": "This fix has been merged. Has it resolved your issue?",
+    "verifyFix": "Yes, verified",
+    "verifyingFix": "Verifying...",
+    "verifiedByYou": "Verified by you",
+    "verificationRecorded": "Thanks for confirming the fix. We've marked this report as resolved.",
+    "stillBroken": "Still broken",
+    "stillBrokenPlaceholder": "Tell us what is still failing so we can reopen the issue with your notes.",
+    "submitStillBroken": "Send follow-up",
+    "submittingReopen": "Sending...",
+    "reopenRequestSubmitted": "Thanks — we reopened the issue with your follow-up details.",
+    "reopenRequestFailed": "Failed to reopen request",
+    "verifyFixFailed": "Failed to record verification",
+    "closeRequestFailed": "Failed to close request",
+    "releases": "Releases",
     "status": {
       "open": "Open",
       "inProgress": "In Progress",
@@ -2068,6 +2152,8 @@
     "feedbackNeutral": "What would make it even better?",
     "feedbackPositive": "What do you love most?",
     "feedbackPlaceholder": "Your feedback (optional)",
+    "publicIssueDisclosure": "Optional: if you check the box below and include at least {{minLength}} characters, we may file your written feedback as a public GitHub issue so maintainers can follow up.",
+    "publicIssueConsent": "I agree that my written feedback may be submitted publicly as a GitHub issue.",
     "submit": "Submit",
     "dismiss": "Not now",
     "thankYou": "Thank you for your feedback!",
@@ -2621,6 +2707,12 @@
   "statsOverview": {
     "title": "Stats Overview",
     "configureStats": "Configure stats",
+    "dragToReorderDesc": "Drag to reorder. Click the eye icon to show/hide stats.",
+    "searchPlaceholder": "Search all available stats...",
+    "noSearchResults": "No stats match your search",
+    "allStatsAdded": "All stats are already added",
+    "addStatFromDashboards": "Add stat from other dashboards",
+    "resetToDefault": "Reset to Default",
     "demo": "Demo",
     "notAvailable": "Not available",
     "updated": "Updated {{time}}",
@@ -2770,6 +2862,7 @@
     "apply": "Apply",
     "save": "Save",
     "cancel": "Cancel",
+    "done": "Done",
     "close": "Close",
     "delete": "Delete",
     "edit": "Edit",
@@ -3515,7 +3608,12 @@
     "noDependencies": "No additional dependencies detected.",
     "optional": "optional",
     "deployToCluster_one": "Deploy to {{count}} cluster",
-    "deployToCluster_other": "Deploy to {{count}} clusters"
+    "deployToCluster_other": "Deploy to {{count}} clusters",
+    "chooseClusterGroup": "Choose a cluster group",
+    "deployWorkloadTo": "Deploy {{name}} to:",
+    "clusterCount_one": "{{count}} cluster",
+    "clusterCount_other": "{{count}} clusters",
+    "andMoreClusters": "+{{count}} more"
   },
   "onboarding": {
     "installTitle": "Install KubeStellar Console",
@@ -3818,6 +3916,10 @@
     "setupGuide": "Setup Guide",
     "setup": "Setup",
     "openAgentSetupGuide": "Open agent setup guide",
+    "activeAlerts_one": "{{count}} alert active",
+    "activeAlerts_other": "{{count}} alerts active",
+    "reviewAlerts": "Review alerts",
+    "hideAlerts": "Hide alerts",
     "switchTo": "Switch to",
     "demo": "Demo",
     "connectionLost": "Connection lost",
@@ -3935,7 +4037,9 @@
       "useInMissionControl": "Use in Mission Control",
       "useInMissionControlDescription": "Add this Kubara chart as a project in Mission Control Phase 1",
       "kubaraBadge": "Kubara",
-      "kubaraBadgeTooltip": "Imported from Kubara Platform Catalog"
+      "kubaraBadgeTooltip": "Imported from Kubara Platform Catalog",
+      "noHealthyClustersTitle": "No healthy clusters available",
+      "noHealthyClustersMessage": "All clusters are currently unhealthy or unreachable. The Flight Plan Blueprint cannot be displayed until at least one cluster becomes available."
     }
   },
   "shared": {
@@ -3955,6 +4059,11 @@
     }
   },
   "missions": {
+    "browser": {
+      "showFilters": "Show Filters",
+      "hideFilters": "Hide Filters",
+      "importSuccess": "Imported \"{{title}}\" successfully."
+    },
     "preflight": {
       "toolCheck": {
         "agentAuthFailed": "Agent authentication failed. Check that KC_AGENT_TOKEN is correctly set and matches between the console and kc-agent.",
@@ -3985,6 +4094,19 @@
     "emptyPromptError": "Prompt cannot be empty.",
     "cancel": "Cancel",
     "confirm": "Run mission"
+  },
+  "missionToolCheck": {
+    "checking": "Checking for required local tools…",
+    "readyTitle": "Local tools ready",
+    "readyDescription": "Required local tools detected: {{tools}}.",
+    "blockedTitle": "Install local tools before running",
+    "blockedDescription": "This mission requires {{tools}} to be installed locally before it can run.",
+    "blockedHint": "Run Mission is disabled until the required tools are installed.",
+    "warningTitle": "Local tools recommended",
+    "warningDescription": "This AI-assisted flow can continue, but local execution steps may still require {{tools}}.",
+    "errorTitle": "Unable to verify local tools",
+    "errorDescription": "The console could not verify required local tools right now.",
+    "installTool": "Install {{tool}}"
   },
   "embed": {
     "getEmbedCode": "Get embed code",

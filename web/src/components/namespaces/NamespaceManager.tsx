@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { Button } from '../ui/Button'
 import { useClusters } from '../../hooks/useMCP'
+import { clusterCacheRef } from '../../hooks/mcp/shared'
 import { useRefreshIndicator } from '../../hooks/useRefreshIndicator'
 import { useModalState } from '../../lib/modals'
 import { useGlobalFilters } from '../../hooks/useGlobalFilters'
@@ -37,9 +38,31 @@ import { GrantAccessModal } from './GrantAccessModal'
 import type { NamespaceDetails, NamespaceAccessEntry } from './types'
 
 type GroupByMode = 'cluster' | 'type'
+type ClusterNamespaceStatus = 'unavailable' | 'accessDenied'
 
 // Cache for namespace data per cluster - persists across filter changes
 const namespaceCache = new Map<string, NamespaceDetails[]>()
+
+function buildFallbackNamespaces(namespaces: string[], cluster: string): NamespaceDetails[] {
+  return Array.from(new Set(namespaces.filter(Boolean)))
+    .sort((left, right) => left.localeCompare(right))
+    .map(namespace => ({
+      name: namespace,
+      cluster,
+      status: 'Active',
+      createdAt: new Date().toISOString(),
+    }))
+}
+
+function getCachedNamespacesForCluster(cluster: string): NamespaceDetails[] {
+  const cachedNamespaces = namespaceCache.get(cluster)
+  if ((cachedNamespaces || []).length > 0) {
+    return cachedNamespaces || []
+  }
+
+  const cachedCluster = clusterCacheRef.clusters.find(currentCluster => currentCluster.name === cluster)
+  return buildFallbackNamespaces(cachedCluster?.namespaces || [], cluster)
+}
 
 export function NamespaceManager() {
   const { t } = useTranslation()
@@ -53,6 +76,7 @@ export function NamespaceManager() {
   const [loading, setLoading] = useState(false)
   // Track which clusters are still loading (for progressive loading indicator)
   const [loadingClusters, setLoadingClusters] = useState<Set<string>>(new Set())
+  const [clusterStatuses, setClusterStatuses] = useState<Record<string, ClusterNamespaceStatus>>({})
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedNamespace, setSelectedNamespace] = useState<NamespaceDetails | null>(null)
@@ -103,10 +127,10 @@ export function NamespaceManager() {
       // Build allNamespaces from cache
       const cachedNamespaces: NamespaceDetails[] = []
       for (const cluster of allClusterNames) {
-        const cached = namespaceCache.get(cluster)
-        if (cached) cachedNamespaces.push(...cached)
+        cachedNamespaces.push(...getCachedNamespacesForCluster(cluster))
       }
       setAllNamespaces(cachedNamespaces)
+      setClusterStatuses({})
       return
     }
 
@@ -118,6 +142,7 @@ export function NamespaceManager() {
 
     if (allClusterNames.length === 0) {
       setAllNamespaces([])
+      setClusterStatuses({})
       return
     }
 
@@ -125,17 +150,18 @@ export function NamespaceManager() {
     lastFetchKeyRef.current = fetchKey
     setLoading(true)
     setLoadingClusters(new Set(clustersToFetch))
+    setClusterStatuses({})
     setError(null)
 
     const failedClusters: string[] = []
     const authFailedClusters: string[] = []
+    const nextClusterStatuses: Record<string, ClusterNamespaceStatus> = {}
 
     // Helper to update state progressively
     const updateNamespacesFromCache = () => {
       const newAllNamespaces: NamespaceDetails[] = []
       for (const cluster of allClusterNames) {
-        const cached = namespaceCache.get(cluster)
-        if (cached) newAllNamespaces.push(...cached)
+        newAllNamespaces.push(...getCachedNamespacesForCluster(cluster))
       }
       setAllNamespaces(newAllNamespaces)
     }
@@ -169,6 +195,7 @@ export function NamespaceManager() {
         let agentAuthFailed = false
         let backendFailed = false
         let backendAuthFailed = false
+        let podFallbackFailed = false
 
         try {
           const controller = new AbortController()
@@ -239,15 +266,22 @@ export function NamespaceManager() {
           try {
             clusterNamespaces = await buildNamespacesFromPods(cluster)
           } catch {
-            failedClusters.push(cluster)
+            podFallbackFailed = true
           }
         }
 
         if (clusterNamespaces.length === 0) {
+          const hasCachedFallback = getCachedNamespacesForCluster(cluster).length > 0
           if (backendAuthFailed) {
             authFailedClusters.push(cluster)
-          } else if (agentFailed || agentAuthFailed || backendFailed) {
+            if (!hasCachedFallback) {
+              nextClusterStatuses[cluster] = 'accessDenied'
+            }
+          } else if (agentFailed || agentAuthFailed || backendFailed || podFallbackFailed) {
             failedClusters.push(cluster)
+            if (!hasCachedFallback) {
+              nextClusterStatuses[cluster] = 'unavailable'
+            }
           }
         }
 
@@ -266,6 +300,9 @@ export function NamespaceManager() {
       } catch {
         // Don't fail completely, just note which clusters failed
         failedClusters.push(cluster)
+        if (getCachedNamespacesForCluster(cluster).length === 0) {
+          nextClusterStatuses[cluster] = 'unavailable'
+        }
         // DON'T cache empty arrays on failure - allow retry next time
         // Update loading state even on failure
         setLoadingClusters(prev => {
@@ -276,17 +313,19 @@ export function NamespaceManager() {
       }
     })
 
+    updateNamespacesFromCache()
+
     // Wait for all to complete before marking fully done
     await Promise.all(fetchPromises)
 
     // Final update from cache
     updateNamespacesFromCache()
+    setClusterStatuses(nextClusterStatuses)
 
     // Check actual cache size, not stale state
     let totalCachedNamespaces = 0
     for (const clusterName of allClusterNames) {
-      const cached = namespaceCache.get(clusterName)
-      if (cached) totalCachedNamespaces += cached.length
+      totalCachedNamespaces += getCachedNamespacesForCluster(clusterName).length
     }
 
     // Only show error if ALL clusters failed (no namespaces at all)
@@ -519,30 +558,30 @@ export function NamespaceManager() {
         <div className="mb-4 p-3 rounded-lg bg-red-500/20 border border-red-500/50 text-red-400 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4" />
           {error}
-          <button onClick={() => setError(null)} className="ml-auto">
+          <button aria-label={t('actions.dismiss')} onClick={() => setError(null)} className="ml-auto">
             <X className="w-4 h-4" />
           </button>
         </div>
       )}
 
       {/* Search and Group By Toggle */}
-      <div className="flex gap-4 mb-6">
-        <div className="relative flex-1">
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="relative w-full min-w-0 flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder={t('common.searchNamespaces')}
-            className="w-full pl-10 pr-4 py-2 rounded-lg bg-secondary border border-border text-white placeholder:text-muted-foreground focus:outline-hidden focus:ring-2 focus:ring-blue-500/50"
+            className="w-full min-w-0 pl-10 pr-4 py-2 rounded-lg bg-secondary border border-border text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-2 focus:ring-blue-500/50"
           />
         </div>
-        <div className="flex items-center gap-1 p-1 rounded-lg bg-secondary/30">
+        <div className="flex w-full flex-wrap items-center gap-1 rounded-lg bg-secondary/30 p-1 sm:w-auto sm:flex-nowrap sm:self-start">
           <button
             onClick={() => setGroupBy('cluster')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-sm transition-colors ${groupBy === 'cluster'
+            className={`flex flex-1 items-center justify-center gap-1.5 px-3 py-1.5 rounded text-sm transition-colors sm:flex-none ${groupBy === 'cluster'
               ? 'bg-blue-500/20 text-blue-400'
-              : 'text-muted-foreground hover:text-white'
+              : 'text-muted-foreground hover:text-foreground'
               }`}
             title="Group by cluster"
           >
@@ -551,9 +590,9 @@ export function NamespaceManager() {
           </button>
           <button
             onClick={() => setGroupBy('type')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-sm transition-colors ${groupBy === 'type'
+            className={`flex flex-1 items-center justify-center gap-1.5 px-3 py-1.5 rounded text-sm transition-colors sm:flex-none ${groupBy === 'type'
               ? 'bg-blue-500/20 text-blue-400'
-              : 'text-muted-foreground hover:text-white'
+              : 'text-muted-foreground hover:text-foreground'
               }`}
             title="Group by type (user/system)"
           >
@@ -578,7 +617,8 @@ export function NamespaceManager() {
                   .sort((a, b) => a.name.localeCompare(b.name))
                 const isCollapsed = collapsedClusters.has(clusterName)
                 const isClusterLoading = loadingClusters.has(clusterName)
-                const hasData = namespaceCache.has(clusterName) && !isClusterLoading
+                const clusterStatus = clusterStatuses[clusterName]
+                const hasData = getCachedNamespacesForCluster(clusterName).length > 0
 
                 return (
                   <div key={clusterName}>
@@ -613,7 +653,11 @@ export function NamespaceManager() {
                       <span className="text-sm text-muted-foreground">
                         {isUnreachable ? (
                           <span className="text-yellow-400">offline</span>
-                        ) : isClusterLoading ? (
+                        ) : clusterStatus === 'accessDenied' && !hasData ? (
+                          t('namespaces.status.accessDenied', { defaultValue: 'Access denied' })
+                        ) : clusterStatus === 'unavailable' && !hasData ? (
+                          t('namespaces.status.unavailable', { defaultValue: 'Data unavailable' })
+                        ) : isClusterLoading && !hasData ? (
                           <span className="flex items-center gap-1.5">
                             <Hourglass className="w-3 h-3 animate-pulse" />
                             loading...
@@ -649,6 +693,16 @@ export function NamespaceManager() {
                               />
                             )
                           })
+                        ) : clusterStatus === 'accessDenied' ? (
+                          <p className="text-sm text-yellow-400 py-2">
+                            {t('namespaces.errors.authorizationFailed', 'Authorization failed for namespace access. Your credentials may lack permission to list namespaces on the connected clusters.')}
+                          </p>
+                        ) : clusterStatus === 'unavailable' ? (
+                          <p className="text-sm text-muted-foreground py-2">
+                            {t('namespaces.status.unavailableMessage', {
+                              defaultValue: 'Namespace data is unavailable for this cluster. Try refreshing or check cluster connectivity.'
+                            })}
+                          </p>
                         ) : hasData ? (
                           <p className="text-sm text-muted-foreground py-2">No namespaces found</p>
                         ) : null}
@@ -717,7 +771,7 @@ export function NamespaceManager() {
             </>
           )}
 
-          {filteredNamespaces.length === 0 && !loading && loadingClusters.size === 0 && !error && (
+          {filteredNamespaces.length === 0 && !loading && loadingClusters.size === 0 && !error && targetClusters.every(clusterName => !clusterStatuses[clusterName]) && (
             <div className="flex flex-col items-center justify-center h-40 text-muted-foreground">
               <Folder className="w-12 h-12 mb-3 opacity-50" />
               <p>{t('namespaces.noNamespaces')}</p>

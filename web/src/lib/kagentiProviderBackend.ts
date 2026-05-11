@@ -15,35 +15,86 @@ export interface KagentiProviderAgent {
   tools?: string[]
 }
 
+export type KagentiLLMProvider = 'gemini' | 'anthropic' | 'openai'
+
 export interface KagentiProviderStatus {
   available: boolean
   url?: string
   reason?: string
+  llm_provider?: KagentiLLMProvider
+  api_key_configured?: boolean
+  configured_providers?: KagentiLLMProvider[]
+  config_supported?: boolean
+  config_reason?: string
 }
 
-export async function fetchKagentiProviderStatus(): Promise<KagentiProviderStatus> {
+export interface KagentiProviderConfigStatus {
+  llm_provider?: KagentiLLMProvider
+  api_key_configured?: boolean
+  configured_providers?: KagentiLLMProvider[]
+}
+
+function getRequestSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs)
+  return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
+}
+
+export async function fetchKagentiProviderStatus(options: { signal?: AbortSignal } = {}): Promise<KagentiProviderStatus> {
   try {
     const resp = await authFetch(`${API_BASE}/api/kagenti-provider/status`, {
-      signal: AbortSignal.timeout(KAGENTI_STATUS_TIMEOUT_MS),
+      signal: getRequestSignal(KAGENTI_STATUS_TIMEOUT_MS, options.signal),
     })
     if (!resp.ok) return { available: false, reason: `HTTP ${resp.status}` }
     return resp.json()
-  } catch {
+  } catch (error: unknown) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw error
+    }
     return { available: false, reason: 'unreachable' }
   }
 }
 
-export async function fetchKagentiProviderAgents(): Promise<KagentiProviderAgent[]> {
+export async function fetchKagentiProviderAgents(options: { signal?: AbortSignal } = {}): Promise<KagentiProviderAgent[]> {
   try {
     const resp = await authFetch(`${API_BASE}/api/kagenti-provider/agents`, {
-      signal: AbortSignal.timeout(KAGENTI_STATUS_TIMEOUT_MS),
+      signal: getRequestSignal(KAGENTI_STATUS_TIMEOUT_MS, options.signal),
     })
     if (!resp.ok) return []
     const data = await resp.json()
     return data.agents || []
-  } catch {
+  } catch (error: unknown) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw error
+    }
     return []
   }
+}
+
+export async function updateKagentiProviderConfig(payload: {
+  llm_provider: KagentiLLMProvider
+  api_key?: string
+}): Promise<KagentiProviderConfigStatus> {
+  const resp = await authFetch(`${API_BASE}/api/kagenti-provider/config`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(KAGENTI_STATUS_TIMEOUT_MS),
+  })
+
+  if (!resp.ok) {
+    let message = `HTTP ${resp.status}`
+    try {
+      const data = await resp.json()
+      if (typeof data?.error === 'string' && data.error.length > 0) {
+        message = data.error
+      }
+    } catch {
+      // Ignore invalid JSON errors and fall back to the HTTP status.
+    }
+    throw new Error(message)
+  }
+
+  return resp.json()
 }
 
 /**

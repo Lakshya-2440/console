@@ -52,8 +52,8 @@ func (h *GitOpsHandlers) ListHelmHistory(c *fiber.Ctx) error {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		slog.Warn("[GitOps] helm history failed", "release", release, "error", err, "stderr", stderr.String())
-		return c.JSON(fiber.Map{"history": []HelmHistoryEntry{}, "error": stderr.String()})
+		slog.Error("[GitOps] helm history failed", "release", release, "error", err, "stderr", stderr.String())
+		return c.JSON(fiber.Map{"history": []HelmHistoryEntry{}, "error": "helm operation failed"})
 	}
 
 	history := make([]HelmHistoryEntry, 0)
@@ -106,8 +106,8 @@ func (h *GitOpsHandlers) GetHelmValues(c *fiber.Ctx) error {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		slog.Warn("[GitOps] helm get values failed", "release", release, "error", err, "stderr", stderr.String())
-		return c.JSON(fiber.Map{"values": map[string]interface{}{}, "error": stderr.String()})
+		slog.Error("[GitOps] helm values failed", "release", release, "error", err, "stderr", stderr.String())
+		return c.JSON(fiber.Map{"values": map[string]interface{}{}, "error": "helm operation failed"})
 	}
 
 	var values map[string]interface{}
@@ -211,8 +211,9 @@ func (h *GitOpsHandlers) ListArgoApplications(c *fiber.Ctx) error {
 
 	appList, err := h.k8sClient.ListArgoApplications(ctx)
 	if err != nil {
+		slog.Error("[ArgoCD] failed to list applications", "error", err)
 		return c.Status(500).JSON(fiber.Map{
-			"error":      fmt.Sprintf("Failed to list ArgoCD applications: %v", err),
+			"error":      "Failed to list ArgoCD applications",
 			"isDemoData": true,
 		})
 	}
@@ -255,8 +256,9 @@ func (h *GitOpsHandlers) GetArgoHealthSummary(c *fiber.Ctx) error {
 
 	appList, err := h.k8sClient.ListArgoApplications(ctx)
 	if err != nil {
+		slog.Error("[ArgoCD] failed to list applications for health summary", "error", err)
 		return c.Status(500).JSON(fiber.Map{
-			"error":      fmt.Sprintf("Failed to list ArgoCD applications: %v", err),
+			"error":      "Failed to list ArgoCD applications",
 			"isDemoData": true,
 		})
 	}
@@ -271,18 +273,28 @@ func (h *GitOpsHandlers) GetArgoHealthSummary(c *fiber.Ctx) error {
 	}
 
 	for _, app := range appList.Items {
+		var key string
 		switch app.HealthStatus {
 		case "Healthy":
-			summary["healthy"] = summary["healthy"].(int) + 1
+			key = "healthy"
 		case "Degraded":
-			summary["degraded"] = summary["degraded"].(int) + 1
+			key = "degraded"
 		case "Progressing":
-			summary["progressing"] = summary["progressing"].(int) + 1
+			key = "progressing"
 		case "Missing":
-			summary["missing"] = summary["missing"].(int) + 1
+			key = "missing"
 		default:
-			summary["unknown"] = summary["unknown"].(int) + 1
+			key = "unknown"
 		}
+		count := 0
+		if current, exists := summary[key]; exists {
+			if v, ok := current.(int); ok {
+				count = v
+			} else {
+				slog.Warn("[ArgoCD] unexpected counter type in health summary", "key", key, "type", fmt.Sprintf("%T", current))
+			}
+		}
+		summary[key] = count + 1
 	}
 
 	return c.JSON(fiber.Map{
@@ -306,8 +318,9 @@ func (h *GitOpsHandlers) GetArgoSyncSummary(c *fiber.Ctx) error {
 
 	appList, err := h.k8sClient.ListArgoApplications(ctx)
 	if err != nil {
+		slog.Error("[ArgoCD] failed to list applications for sync summary", "error", err)
 		return c.Status(500).JSON(fiber.Map{
-			"error":      fmt.Sprintf("Failed to list ArgoCD applications: %v", err),
+			"error":      "Failed to list ArgoCD applications",
 			"isDemoData": true,
 		})
 	}
@@ -320,14 +333,24 @@ func (h *GitOpsHandlers) GetArgoSyncSummary(c *fiber.Ctx) error {
 	}
 
 	for _, app := range appList.Items {
+		var key string
 		switch app.SyncStatus {
 		case "Synced":
-			summary["synced"] = summary["synced"].(int) + 1
+			key = "synced"
 		case "OutOfSync":
-			summary["outOfSync"] = summary["outOfSync"].(int) + 1
+			key = "outOfSync"
 		default:
-			summary["unknown"] = summary["unknown"].(int) + 1
+			key = "unknown"
 		}
+		count := 0
+		if current, exists := summary[key]; exists {
+			if v, ok := current.(int); ok {
+				count = v
+			} else {
+				slog.Warn("[ArgoCD] unexpected counter type in sync summary", "key", key, "type", fmt.Sprintf("%T", current))
+			}
+		}
+		summary[key] = count + 1
 	}
 
 	return c.JSON(fiber.Map{
@@ -381,8 +404,9 @@ func (h *GitOpsHandlers) ListArgoApplicationSets(c *fiber.Ctx) error {
 
 	appSetList, err := h.k8sClient.ListArgoApplicationSets(ctx)
 	if err != nil {
+		slog.Error("[ArgoCD] failed to list ApplicationSets", "error", err)
 		return c.Status(500).JSON(fiber.Map{
-			"error":      fmt.Sprintf("Failed to list ArgoCD ApplicationSets: %v", err),
+			"error":      "Failed to list ArgoCD ApplicationSets",
 			"isDemoData": true,
 		})
 	}

@@ -16,12 +16,14 @@
  */
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { api } from '../../lib/api'
 import { isDemoMode } from '../../lib/demoMode'
 import { useAuth } from '../../lib/auth'
 import { NAVBAR_HEIGHT_PX } from '../../lib/constants/ui'
 import { matchMissionsToCluster } from '../../lib/missions/matcher'
 import { useClusterContext } from '../../hooks/useClusterContext'
+import { useMobile } from '../../hooks/useMobile'
 import {
   emitFixerBrowsed,
   emitFixerViewed,
@@ -114,6 +116,7 @@ const MODAL_TOP_INSET_PX = NAVBAR_HEIGHT_PX + MODAL_NAVBAR_GAP_PX
  * modal panel, matching the inset pattern used by MissionControlDialog.
  */
 const MODAL_SIDE_INSET_PX = 16
+const COLLAPSIBLE_FILTERS_BREAKPOINT_PX = 640
 
 // ============================================================================
 // Types
@@ -214,11 +217,17 @@ function resolveMissionTreeTarget(
 // ============================================================================
 
 export function MissionBrowser({ isOpen, onClose, onImport, initialMission, onUseInMissionControl }: MissionBrowserProps) {
+  const { t } = useTranslation(['common'])
   const { user, isAuthenticated } = useAuth()
   const { clusterContext } = useClusterContext()
   const clusterContextRef = useRef(clusterContext)
   clusterContextRef.current = clusterContext
   const { showToast } = useToast()
+
+  const [isSmallScreen, setIsSmallScreen] = useState(() =>
+    typeof window !== 'undefined' && window.innerWidth < COLLAPSIBLE_FILTERS_BREAKPOINT_PX,
+  )
+  const { isMobile } = useMobile()
 
   // Navigation state
   const [searchQuery, setSearchQuery] = useState('')
@@ -230,8 +239,6 @@ export function MissionBrowser({ isOpen, onClose, onImport, initialMission, onUs
   const [missionClassFilter, setMissionClassFilter] = useState<string>('All')
   const [difficultyFilter, setDifficultyFilter] = useState<string>('All')
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set())
-  // Default to list view and hide filters on mobile for better content visibility
-  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768
   const [viewMode, setViewMode] = useState<ViewMode>(isMobile ? 'list' : 'grid')
   const [showFilters, setShowFilters] = useState(!isMobile)
 
@@ -299,6 +306,22 @@ export function MissionBrowser({ isOpen, onClose, onImport, initialMission, onUs
   useEffect(() => {
     treeNodesRef.current = treeNodes
   }, [treeNodes])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const mediaQuery = window.matchMedia(`(max-width: ${COLLAPSIBLE_FILTERS_BREAKPOINT_PX - 1}px)`)
+    const handleChange = (event: MediaQueryListEvent) => setIsSmallScreen(event.matches)
+
+    setIsSmallScreen(mediaQuery.matches)
+    mediaQuery.addEventListener('change', handleChange)
+    return () => mediaQuery.removeEventListener('change', handleChange)
+  }, [])
+
+  useEffect(() => {
+    setViewMode(isMobile ? 'list' : 'grid')
+    setShowFilters(!isMobile)
+  }, [isMobile])
 
   useEffect(() => {
     expandedNodesRef.current = expandedNodes
@@ -970,7 +993,10 @@ export function MissionBrowser({ isOpen, onClose, onImport, initialMission, onUs
     if (result.valid) {
       emitFixerImported(mission.title, mission.cncfProject)
       onImport(mission)
-      onClose()
+      showToast(t('missions.browser.importSuccess', { title: mission.title }), 'success')
+      pendingImportRef.current = null
+      setPendingImport(null)
+      setScanResult(null)
     }
     setIsScanning(false)
   }
@@ -1223,6 +1249,7 @@ export function MissionBrowser({ isOpen, onClose, onImport, initialMission, onUs
         viewMode={viewMode}
         onViewModeChange={setViewMode}
         onClose={onClose}
+        isSmallScreen={isSmallScreen}
       />
 
       {/* Filter panel */}

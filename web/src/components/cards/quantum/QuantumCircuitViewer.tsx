@@ -4,6 +4,7 @@ import { Skeleton } from '../../ui/Skeleton'
 import { isGlobalQuantumPollingPaused } from '../../../lib/quantum/pollingContext'
 import { isQuantumForcedToDemo } from '../../../lib/demoMode'
 import { useAuth } from '../../../lib/auth'
+import { FETCH_DEFAULT_TIMEOUT_MS } from '../../../lib/constants/network'
 
 const CIRCUIT_ASCII_POLLING_INTERVAL_MS = 10000
 
@@ -16,6 +17,7 @@ export const QuantumCircuitViewer: React.FC<QuantumCircuitViewerProps> = ({ isDe
   const [circuitAscii, setCircuitAscii] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isFailed, setIsFailed] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   if (authIsLoading) {
     return (
@@ -60,7 +62,9 @@ export const QuantumCircuitViewer: React.FC<QuantumCircuitViewerProps> = ({ isDe
       try {
         setIsLoading(true)
         setIsFailed(false)
-        const response = await fetch('/api/quantum/qasm/circuit/ascii')
+        const response = await fetch('/api/quantum/qasm/circuit/ascii', {
+          signal: AbortSignal.timeout(FETCH_DEFAULT_TIMEOUT_MS),
+        })
         if (!response.ok) {
           throw new Error(`Failed to fetch circuit: ${response.statusText}`)
         }
@@ -70,8 +74,10 @@ export const QuantumCircuitViewer: React.FC<QuantumCircuitViewerProps> = ({ isDe
           throw new Error('No circuit data found in response')
         }
         setCircuitAscii(preMatch[1].trimEnd())
+        setError(null)
       } catch (error) {
         console.error('Error fetching quantum circuit:', error)
+        setError(error instanceof Error ? error.message : 'Unable to load quantum circuit diagram')
         setIsFailed(true)
       } finally {
         setIsLoading(false)
@@ -101,7 +107,7 @@ export const QuantumCircuitViewer: React.FC<QuantumCircuitViewerProps> = ({ isDe
           </div>
         ) : (
           <div className="text-center text-muted-foreground">
-            <p>Unable to load quantum circuit diagram</p>
+            <p>{error ?? 'Unable to load quantum circuit diagram'}</p>
           </div>
         )}
     </div>

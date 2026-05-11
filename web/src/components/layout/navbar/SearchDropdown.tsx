@@ -210,6 +210,7 @@ export function SearchDropdown() {
   const searchRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const resultsRef = useRef<HTMLDivElement>(null)
+  const previousPathnameRef = useRef(location.pathname)
   // Flat results from the SearchResultsPanel child, used for keyboard Enter handling.
   // Total count is tracked for analytics (onBlur emits query stats).
   const flatResultsRef = useRef<SearchItem[]>([])
@@ -333,8 +334,10 @@ export function SearchDropdown() {
         // with the `capture: true` on the addEventListener call below so
         // this listener wins regardless of registration order.
         event.stopPropagation()
-        inputRef.current?.focus()
         openSearch()
+        // Defer focus until after React commits the open state so inputRef is
+        // guaranteed to be attached and the input is focusable (#find-and-search).
+        requestAnimationFrame(() => inputRef.current?.focus())
         emitGlobalSearchOpened('keyboard')
       }
 
@@ -369,8 +372,23 @@ export function SearchDropdown() {
     // event.stopPropagation() inside the Ctrl+K branch above. The third
     // arg must match between addEventListener and removeEventListener.
     document.addEventListener('keydown', handleKeyDown, true)
-    return () => document.removeEventListener('keydown', handleKeyDown, true)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown, true)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
   }, [isSearchOpen, isResultsPanelActive, selectedIndex, handleSelect, handleAskAI, openSearch, closeSearch])
+
+  useEffect(() => {
+    if (previousPathnameRef.current !== location.pathname) {
+      setSearchQuery('')
+      setSelectedIndex(0)
+      closeSearch()
+      previousPathnameRef.current = location.pathname
+      return
+    }
+
+    previousPathnameRef.current = location.pathname
+  }, [location.pathname, closeSearch])
 
   // Reset selected index when results change
   useEffect(() => {

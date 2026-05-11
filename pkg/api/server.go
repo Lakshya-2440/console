@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,11 +52,8 @@ const (
 	portReleasePollInterval = 50 * time.Millisecond
 	defaultDevFrontendURL   = "http://localhost:5174"
 	defaultProdFrontendURL  = "http://localhost:8080"
-
-	// kcAgentBaseURL is the loopback URL of the co-located kc-agent HTTP server.
-	// The backend proxies auto-update requests to this address so the browser
-	// never makes a cross-origin call to kc-agent (avoids CORS/PNA issues).
-	kcAgentBaseURL = "http://127.0.0.1:8585"
+	defaultKCAgentBaseURL   = "http://127.0.0.1:8585"
+	kcAgentURLEnvVar        = "KC_AGENT_URL"
 
 	// kcAgentProxyTimeout is the timeout for proxied requests to kc-agent.
 	kcAgentProxyTimeout = 30 * time.Second
@@ -84,6 +82,11 @@ const (
 // Used in /health response for stale-frontend detection.
 var Version = "dev"
 
+// kcAgentBaseURL is the loopback URL of the co-located kc-agent HTTP server.
+// The backend proxies auto-update requests to this address so the browser
+// never makes a cross-origin call to kc-agent (avoids CORS/PNA issues).
+var kcAgentBaseURL = defaultKCAgentBaseURL
+
 // BuildInfo holds VCS metadata extracted from the Go binary at startup.
 type BuildInfo struct {
 	GoVersion   string
@@ -98,6 +101,8 @@ var buildInfo BuildInfo
 func GetBuildInfo() BuildInfo { return buildInfo }
 
 func init() {
+	kcAgentBaseURL = normalizeKCAgentBaseURL(os.Getenv(kcAgentURLEnvVar))
+
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return
@@ -113,6 +118,30 @@ func init() {
 			buildInfo.VCSModified = s.Value
 		}
 	}
+}
+
+func normalizeKCAgentBaseURL(raw string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if trimmed == "" {
+		return defaultKCAgentBaseURL
+	}
+	return trimmed
+}
+
+func kcAgentWebSocketBaseURL(httpURL string) string {
+	parsedURL, err := url.Parse(httpURL)
+	if err != nil {
+		return ""
+	}
+
+	switch parsedURL.Scheme {
+	case "http":
+		parsedURL.Scheme = "ws"
+	case "https":
+		parsedURL.Scheme = "wss"
+	}
+
+	return strings.TrimRight(parsedURL.String(), "/")
 }
 
 // Config holds server configuration
@@ -169,8 +198,8 @@ type Config struct {
 	// AgentToken is the shared secret for authenticating with kc-agent.
 	// startup-oauth.sh generates this and passes it to both kc-agent and
 	// the Go backend via the KC_AGENT_TOKEN env var. The backend serves
-	// it to authenticated users via GET /api/agent/token so the frontend
-	// can call kc-agent endpoints that require Bearer auth.
+	// it via GET /api/agent/token so the frontend can call kc-agent
+	// endpoints that require Bearer auth.
 	AgentToken string
 	// Kubara platform catalog configuration
 	// KubaraCatalogRepo is the GitHub owner/name of the catalog repo
@@ -512,6 +541,14 @@ func (s *Server) setupMiddleware() {
 		const kcAgentLocalhost = "http://localhost:8585" // kc-agent HTTP on localhost
 		const kcAgentLocalhostWS = "ws://localhost:8585" // kc-agent WebSocket on localhost
 
+		customKCAgentConnectSrc := ""
+		if kcAgentBaseURL != kcAgentLoopback && kcAgentBaseURL != kcAgentLocalhost {
+			customKCAgentConnectSrc = " " + kcAgentBaseURL
+			if kcAgentBaseURLWS := kcAgentWebSocketBaseURL(kcAgentBaseURL); kcAgentBaseURLWS != "" {
+				customKCAgentConnectSrc += " " + kcAgentBaseURLWS
+			}
+		}
+
 		// script-src includes 'wasm-unsafe-eval' because the SQLite cache
 		// worker compiles a WebAssembly module at runtime; without it the
 		// worker aborts, logs a noisy CompileError, and forces an IndexedDB
@@ -535,7 +572,7 @@ func (s *Server) setupMiddleware() {
 				"worker-src 'self' blob:; "+
 				"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "+
 				"img-src 'self' data: https:; "+
-				"connect-src 'self' "+kcAgentLoopback+" "+kcAgentLoopbackWS+" "+kcAgentLocalhost+" "+kcAgentLocalhostWS+" https://console.kubestellar.io https://api.github.com https://raw.githubusercontent.com https://www.google-analytics.com https://www.googletagmanager.com https://cdn.jsdelivr.net wss:; "+
+				"connect-src 'self' "+kcAgentLoopback+" "+kcAgentLoopbackWS+" "+kcAgentLocalhost+" "+kcAgentLocalhostWS+customKCAgentConnectSrc+" https://console.kubestellar.io https://api.github.com https://raw.githubusercontent.com https://www.google-analytics.com https://www.googletagmanager.com https://cdn.jsdelivr.net wss:; "+
 				"font-src 'self' data: https://fonts.gstatic.com; "+
 				"object-src 'none'; "+
 				"base-uri 'self'")
@@ -894,17 +931,9 @@ func (s *Server) setupRoutes() {
 
 	api := s.app.Group("/api", apiLimiterWithSkip, bodyGuard, csrfGuard, middleware.JWTAuth(s.config.JWTSecret))
 
-	// User identity routes — exempt from both apiLimiter (via skip list) and
-	// authLimiter. JWTAuth is sufficient protection. The old authLimiter
-	// (10 req/min) caused login loops: initial page load fires multiple /api/me
-	// calls, exhausting the budget and triggering a 429→redirect→login cycle.
-	user := handlers.NewUserHandler(s.store)
-	s.app.Get("/api/me", bodyGuard, csrfGuard, middleware.JWTAuth(s.config.JWTSecret), user.GetCurrentUser)
-	s.app.Put("/api/me", bodyGuard, csrfGuard, middleware.JWTAuth(s.config.JWTSecret), user.UpdateCurrentUser)
-
 	// kc-agent token endpoint — returns the shared KC_AGENT_TOKEN so the
-	// frontend can authenticate to kc-agent HTTP endpoints (auto-update, etc.).
-	// Auth-protected: only logged-in users can retrieve this.
+	// authenticated frontend can establish Bearer-authenticated kc-agent
+	// requests after the cookie-backed session is in place.
 	agentToken := s.config.AgentToken
 	api.Get("/agent/token", func(c *fiber.Ctx) error {
 		if agentToken == "" {
@@ -912,6 +941,14 @@ func (s *Server) setupRoutes() {
 		}
 		return c.JSON(fiber.Map{"token": agentToken})
 	})
+
+	// User identity routes — exempt from both apiLimiter (via skip list) and
+	// authLimiter. JWTAuth is sufficient protection. The old authLimiter
+	// (10 req/min) caused login loops: initial page load fires multiple /api/me
+	// calls, exhausting the budget and triggering a 429→redirect→login cycle.
+	user := handlers.NewUserHandler(s.store)
+	s.app.Get("/api/me", bodyGuard, csrfGuard, middleware.JWTAuth(s.config.JWTSecret), user.GetCurrentUser)
+	s.app.Put("/api/me", bodyGuard, csrfGuard, middleware.JWTAuth(s.config.JWTSecret), user.UpdateCurrentUser)
 
 	// kc-agent auto-update proxy — forwards /api/agent/auto-update/* to the
 	// co-located kc-agent at 127.0.0.1:8585. This avoids cross-origin requests
@@ -1146,11 +1183,14 @@ func (s *Server) setupRoutes() {
 	// POST route is registered outside the /api group to exempt it from apiLimiter (#9969)
 	// GET routes still use the group limiters for general API protection
 	api.Get("/feedback/requests", feedback.ListFeatureRequests)
+	api.Get("/feedback/issue-link-capabilities", feedback.GetIssueLinkCapabilities)
 	api.Get("/feedback/queue", feedback.ListAllFeatureRequests)
 	api.Get("/feedback/requests/:id", feedback.GetFeatureRequest)
 	api.Post("/feedback/requests/:id/feedback", feedback.SubmitFeedback)
 	api.Post("/feedback/requests/:id/close", feedback.CloseRequest)
+	api.Patch("/feedback/:id/close", feedback.CloseRequest)
 	api.Post("/feedback/requests/:id/request-update", feedback.RequestUpdate)
+	api.Post("/feedback/:id/reopen", feedback.ReopenRequest)
 	api.Get("/feedback/preview/:pr_number", feedback.CheckPreviewStatus)
 	api.Get("/notifications", feedback.GetNotifications)
 	api.Get("/notifications/unread-count", feedback.GetUnreadCount)
@@ -1254,11 +1294,20 @@ func (s *Server) setupRoutes() {
 
 	// Kagenti A2A proxy routes
 	kagentiProviderClient := kagenti_provider.NewKagentiClientFromEnv()
-	kagentiProviderHandler := handlers.NewKagentiProviderProxyHandler(kagentiProviderClient)
+	var kagentiConfigManager kagenti_provider.ConfigManager
+	if manager, err := kagenti_provider.NewKubernetesConfigManagerFromEnv(); err != nil {
+		slog.Debug("kagenti config manager unavailable", "error", err)
+	} else {
+		kagentiConfigManager = manager
+	}
+	kagentiProviderHandler := handlers.NewKagentiProviderProxyHandler(kagentiProviderClient, kagentiConfigManager, s.k8sClient)
 	api.Get("/kagenti-provider/status", kagentiProviderHandler.GetStatus)
 	api.Get("/kagenti-provider/agents", kagentiProviderHandler.ListAgents)
+	api.Get("/kagenti-provider/tools", kagentiProviderHandler.GetTools)
+	api.Patch("/kagenti-provider/config", kagentiProviderHandler.UpdateConfig)
 	api.Post("/kagenti-provider/chat", kagentiProviderHandler.Chat)
 	api.Post("/kagenti-provider/tools/call", kagentiProviderHandler.CallTool)
+	api.Post("/kagenti-provider/tools/call-direct", kagentiProviderHandler.CallToolDirect)
 
 	// Console persistence routes (CRD-based state management)
 	persistenceHandler := handlers.NewConsolePersistenceHandlers(s.persistenceStore, s.k8sClient, s.hub, s.store)

@@ -5,6 +5,15 @@ import * as authModule from '../../lib/auth'
 
 vi.mock('../../lib/auth')
 
+vi.mock('../../lib/demoMode', async () => {
+  const actual = await vi.importActual<typeof import('../../lib/demoMode')>('../../lib/demoMode')
+
+  return {
+    ...actual,
+    isQuantumForcedToDemo: () => false,
+  }
+})
+
 describe('useResultHistogram', () => {
   beforeEach(() => {
     vi.clearAllMocks()
